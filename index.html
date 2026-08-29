@@ -11,7 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet">
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9767176956440077"
      crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@2.1.2/build/opensheetmusicdisplay.min.js"></script>
+<script src="https://www.verovio.org/javascript/latest/verovio-toolkit-wasm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.4/dist/svg2pdf.umd.min.js"></script>
 <style>
@@ -148,6 +148,27 @@
     font-size: 13px;
     color: rgba(255,255,255,.65);
   }
+  .sample-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 14px 0 0;
+    font-size: 13px;
+    color: rgba(255,255,255,.65);
+  }
+  .sample-link {
+    background: rgba(255,255,255,.12);
+    border: 1px solid rgba(255,255,255,.25);
+    color: #fff;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .sample-link:hover { background: rgba(255,255,255,.22); }
+  .sample-link:disabled { opacity: .5; cursor: default; }
   .pill-row {
     display: flex;
     flex-wrap: wrap;
@@ -436,6 +457,11 @@
       <h1 class="hero-title">음악 전공자를 위한<br><span class="accent-text">AI기반 초견 도우미!</span></h1>
       <p class="hero-sub">처음 보는 악보도 빠르게 숙지할 수 있도록<br>AI가 중요 정보를 빠르게 시각화해줍니다!</p>
       <button class="cta-btn" id="heroUploadBtn">⬆ 악보 불러오기</button>
+      <div class="sample-row">
+        샘플로 먼저 사용해보기:
+        <button class="sample-link" id="sampleBtn1" data-src="rachmaninov-etude-tableau-op-39-no-6-fixed.mxl" data-name="Rachmaninoff_Etude-Tableau_Op39_No6.mxl">샘플1 - 라흐마니노프</button>
+        <button class="sample-link" id="sampleBtn2" data-src="bartok-allegro-barbaro.mxl" data-name="Bartok_Allegro_Barbaro.mxl">샘플2 - 바르톡</button>
+      </div>
       <div class="format-note">MusicXML · XML · MXL 파일 규격의 악보 인식 가능</div>
       <div class="pill-row">
         <span class="pill pill-orange">♯♭ 변화표</span>
@@ -499,8 +525,8 @@
     </div>
 
     <div class="density-control" id="densityControl">
-      <label for="measuresSlider">한 줄당 마디 수: <b id="measuresValue">5</b></label>
-      <input type="range" id="measuresSlider" min="2" max="8" value="5" step="1">
+      <label for="measuresSlider">악보 확대율: <b id="measuresValue">40</b>%</label>
+      <input type="range" id="measuresSlider" min="25" max="65" value="40" step="1">
     </div>
 
     <div class="stats" id="stats">
@@ -593,79 +619,6 @@ function keyDefault(step, fifths) {
 
 const INSERT_BEFORE = new Set(['notehead-text', 'staff', 'beam', 'notations', 'lyric', 'play', 'listen']);
 
-// Some scores redeclare a staff's already-current clef again a measure or
-// two later (harmless, but apparently enough to confuse OSMD's per-staff
-// clef tracking in piano writing with frequent hand-crossing, occasionally
-// drawing a later change on the *other* staff entirely). Stripping any
-// <clef> that doesn't actually change anything for that staff number
-// removes the ambiguity at the source.
-function dedupeRedundantClefs(doc) {
-  const parts = Array.from(doc.documentElement.children).filter(c => c.tagName === 'part');
-  parts.forEach(part => {
-    const currentClef = {};
-    const measures = Array.from(part.children).filter(c => c.tagName === 'measure');
-    measures.forEach(measure => {
-      const attrBlocks = Array.from(measure.children).filter(c => c.tagName === 'attributes');
-      attrBlocks.forEach(attrBlock => {
-        Array.from(attrBlock.children).filter(c => c.tagName === 'clef').forEach(clefEl => {
-          const num = clefEl.getAttribute('number') || '1';
-          const sign = clefEl.querySelector('sign') ? clefEl.querySelector('sign').textContent : '';
-          const line = clefEl.querySelector('line') ? clefEl.querySelector('line').textContent : '';
-          const key = sign + '|' + line;
-          if (currentClef[num] === key) {
-            attrBlock.removeChild(clefEl);
-          } else {
-            currentClef[num] = key;
-          }
-        });
-        if (attrBlock.children.length === 0) attrBlock.remove();
-      });
-    });
-  });
-}
-
-// OSMD sometimes mixes up which staff a mid-measure clef change belongs to
-// when both staves of a grand staff switch clefs in quick succession (common
-// in piano writing with hand-crossing), drawing notes against the wrong
-// clef entirely. Moving each clef-only <attributes> block to the start of
-// its measure sidesteps this: the clef for each staff is then unambiguous
-// from beat 1, at the minor cost of showing that clef slightly early for
-// whatever note(s) preceded the original change point.
-function hoistMidMeasureClefChanges(doc) {
-  const parts = Array.from(doc.documentElement.children).filter(c => c.tagName === 'part');
-  parts.forEach(part => {
-    const measures = Array.from(part.children).filter(c => c.tagName === 'measure');
-    measures.forEach(measure => {
-      const children = Array.from(measure.children);
-      const firstNoteIdx = children.findIndex(c => c.tagName === 'note');
-      if (firstNoteIdx <= 0) return;
-      const lateClefBlocks = children.filter((c, idx) =>
-        idx > firstNoteIdx && c.tagName === 'attributes' &&
-        Array.from(c.children).length > 0 &&
-        Array.from(c.children).every(k => k.tagName === 'clef')
-      );
-      if (!lateClefBlocks.length) return;
-
-      let leading = children[0].tagName === 'attributes' ? children[0] : null;
-      if (!leading) {
-        leading = doc.createElement('attributes');
-        measure.insertBefore(leading, measure.firstChild);
-      }
-      lateClefBlocks.forEach(block => {
-        Array.from(block.children).forEach(clefEl => {
-          const num = clefEl.getAttribute('number');
-          const existing = Array.from(leading.children).find(k =>
-            k.tagName === 'clef' && k.getAttribute('number') === num
-          );
-          if (existing) leading.removeChild(existing);
-          leading.appendChild(clefEl);
-        });
-        block.remove();
-      });
-    });
-  });
-}
-
 function colorizeMusicXML(xmlText, settings) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, 'application/xml');
@@ -676,9 +629,6 @@ function colorizeMusicXML(xmlText, settings) {
   if (root.tagName !== 'score-partwise') {
     throw new Error(`지원하지 않는 형식입니다: <${root.tagName}> (score-partwise만 지원).`);
   }
-
-  dedupeRedundantClefs(doc);
-  hoistMidMeasureClefChanges(doc);
 
   const stats = { notes: 0, sharp: 0, doubleSharp: 0, flat: 0, doubleFlat: 0, white: 0, breaksRemoved: 0, dynamics: 0, expression: 0 };
 
@@ -868,8 +818,6 @@ const NEUTRAL_SETTINGS = {
   expression:  { enabled: false, color: '#000000' },
 };
 
-const MEASURES_PER_LINE = 4;
-let desktopMeasuresPerLine = 5;
 
 /* ===================== UI wiring ===================== */
 
@@ -884,78 +832,73 @@ const downloadBtn = document.getElementById('downloadBtn');
 let rawXmlText = null;
 let fileBase = 'score';
 let lastColoredXml = null;
-let osmdLeft = null, osmdRight = null;
+let vrvLeft = null, vrvRight = null;
+let desktopScale = 40;
 
 function setGlobalError(msg) { globalStatus.textContent = msg || ''; }
-
-function ensureOsmd() {
-  const desktop = isDesktopView();
-  // autoResize must be set at construction time -- toggling it afterward via
-  // the AutoResizeEnabled property does not reliably re-run OSMD's layout
-  // math, so mode (mobile continuous-scroll vs desktop paged) is decided once
-  // here and baked into the constructor options.
-  const compactOpts = {
-    autoResize: !desktop, backend: 'svg',
-    drawTitle: false, drawComposer: false, drawSubtitle: false,
-    drawPartNames: false, drawCredits: false, drawLyricist: false,
-  };
-  if (!osmdLeft) {
-    osmdLeft = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('paneLeftInner'), compactOpts);
-  }
-  if (!osmdRight) {
-    osmdRight = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('paneRightInner'), compactOpts);
-  }
-
-  // Mobile (continuous scroll): force >=4 measures/line so notation isn't
-  // too zoomed-in inside the small pane. Desktop (one printed page at a
-  // time): force a denser fixed count matching the PDF export, since "auto"
-  // under-packs this piece's dense passages into only ~2 measures/system.
-  osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? desktopMeasuresPerLine : MEASURES_PER_LINE;
-  osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? desktopMeasuresPerLine : MEASURES_PER_LINE;
-  document.getElementById('densityControl').style.display = desktop ? 'flex' : 'none';
-  osmdLeft.setPageFormat(desktop ? 'A4_P' : 'Endless');
-  osmdRight.setPageFormat(desktop ? 'A4_P' : 'Endless');
-  document.querySelector('#paneLeftInner').closest('.pane-body').classList.toggle('paged', desktop);
-  document.querySelector('#paneRightInner').closest('.pane-body').classList.toggle('paged', desktop);
-
-  linkPaneScroll();
-}
 
 function isDesktopView() {
   return window.matchMedia('(min-width: 900px)').matches;
 }
 
+// verovio.module may already be a resolved Emscripten Module object, or a
+// Promise depending on version -- and its onRuntimeInitialized event can
+// fire before we get a chance to attach a listener. Polling by attempting a
+// real construction sidesteps both races. The constructed instance is kept
+// (destroying it and constructing another was observed to corrupt page
+// counts for other already-loaded instances, likely due to pointer reuse
+// in Verovio's C++ side), and reused directly as the first toolkit needed.
+async function ensureVerovioToolkit() {
+  let mod = verovio.module;
+  for (let i = 0; i < 200; i++) {
+    try {
+      return new verovio.toolkit(mod);
+    } catch (e) {
+      if (mod && typeof mod.then === 'function') mod = await mod;
+      else await new Promise(r => setTimeout(r, 50));
+    }
+  }
+  throw new Error('악보 렌더링 엔진을 초기화하지 못했습니다.');
+}
+
+async function ensureRenderers() {
+  if (!vrvLeft) vrvLeft = await ensureVerovioToolkit();
+  if (!vrvRight) vrvRight = await ensureVerovioToolkit();
+  linkPaneScroll();
+}
+
+function verovioOptions(desktop) {
+  return desktop
+    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false }
+    : { pageWidth: 1500, pageHeight: 60000, scale: 32, breaks: 'auto', adjustPageHeight: true };
+}
+
 const pagerState = { current: 0, total: 1 };
 
-function updatePager() {
-  if (!isDesktopView()) return;
-  const leftSvgs = Array.from(document.getElementById('paneLeftInner').querySelectorAll('svg'));
-  const rightSvgs = Array.from(document.getElementById('paneRightInner').querySelectorAll('svg'));
-  const total = Math.max(leftSvgs.length, rightSvgs.length, 1);
-  pagerState.total = total;
-  if (pagerState.current >= total) pagerState.current = total - 1;
-  if (pagerState.current < 0) pagerState.current = 0;
-  leftSvgs.forEach((svg, i) => { svg.style.display = (i === pagerState.current) ? '' : 'none'; });
-  rightSvgs.forEach((svg, i) => { svg.style.display = (i === pagerState.current) ? '' : 'none'; });
-  document.getElementById('pagerLabel').textContent = `${pagerState.current + 1} / ${total}`;
+function renderCurrentPage() {
+  const desktop = isDesktopView();
+  const leftEl = document.getElementById('paneLeftInner');
+  const rightEl = document.getElementById('paneRightInner');
+  const n = desktop ? pagerState.current + 1 : 1;
+  leftEl.innerHTML = vrvLeft.renderToSVG(n);
+  rightEl.innerHTML = vrvRight.renderToSVG(n);
+  document.getElementById('pagerLabel').textContent = `${pagerState.current + 1} / ${pagerState.total}`;
   document.getElementById('pagerPrev').disabled = pagerState.current === 0;
-  document.getElementById('pagerNext').disabled = pagerState.current >= total - 1;
+  document.getElementById('pagerNext').disabled = pagerState.current >= pagerState.total - 1;
 }
 
 document.getElementById('pagerPrev').addEventListener('click', () => {
-  if (pagerState.current > 0) { pagerState.current--; updatePager(); }
+  if (pagerState.current > 0) { pagerState.current--; renderCurrentPage(); }
 });
 document.getElementById('pagerNext').addEventListener('click', () => {
-  if (pagerState.current < pagerState.total - 1) { pagerState.current++; updatePager(); }
+  if (pagerState.current < pagerState.total - 1) { pagerState.current++; renderCurrentPage(); }
 });
 
 const measuresSlider = document.getElementById('measuresSlider');
 measuresSlider.addEventListener('input', async () => {
-  desktopMeasuresPerLine = parseInt(measuresSlider.value, 10);
-  document.getElementById('measuresValue').textContent = desktopMeasuresPerLine;
+  desktopScale = parseInt(measuresSlider.value, 10);
+  document.getElementById('measuresValue').textContent = desktopScale;
   if (!rawXmlText || !isDesktopView()) return;
-  osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktopMeasuresPerLine;
-  osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktopMeasuresPerLine;
   pagerState.current = 0;
   await renderLeft();
   await renderRight();
@@ -989,15 +932,23 @@ function updateStatsUI(stats) {
   document.getElementById('statWhite').textContent = stats.white;
 }
 
+function updateModeUI() {
+  const desktop = isDesktopView();
+  document.getElementById('densityControl').style.display = desktop ? 'flex' : 'none';
+  document.querySelector('#paneLeftInner').closest('.pane-body').classList.toggle('paged', desktop);
+  document.querySelector('#paneRightInner').closest('.pane-body').classList.toggle('paged', desktop);
+}
+
 async function renderLeft() {
   statusLeft.textContent = '렌더링 중...';
   try {
     const { xml } = colorizeMusicXML(rawXmlText, NEUTRAL_SETTINGS);
-    await osmdLeft.load(xml);
-    if (isDesktopView()) osmdLeft.Zoom = 0.5;
-    osmdLeft.render();
+    updateModeUI();
+    vrvLeft.setOptions(verovioOptions(isDesktopView()));
+    vrvLeft.loadData(xml);
+    pagerState.total = Math.max(vrvLeft.getPageCount(), vrvRight ? vrvRight.getPageCount() : 1, 1);
+    renderCurrentPage();
     statusLeft.textContent = '';
-    updatePager();
   } catch (err) {
     console.error(err);
     statusLeft.textContent = '렌더링 실패';
@@ -1010,11 +961,12 @@ async function renderRight() {
     const { xml, stats } = colorizeMusicXML(rawXmlText, settings);
     lastColoredXml = xml;
     updateStatsUI(stats);
-    await osmdRight.load(xml);
-    if (isDesktopView()) osmdRight.Zoom = 0.5;
-    osmdRight.render();
+    updateModeUI();
+    vrvRight.setOptions(verovioOptions(isDesktopView()));
+    vrvRight.loadData(xml);
+    pagerState.total = Math.max(vrvLeft ? vrvLeft.getPageCount() : 1, vrvRight.getPageCount(), 1);
+    renderCurrentPage();
     statusRight.textContent = '';
-    updatePager();
   } catch (err) {
     console.error(err);
     statusRight.textContent = '렌더링 실패';
@@ -1083,7 +1035,7 @@ async function handleFile(file) {
     document.getElementById('heroSection').classList.add('hidden');
     document.getElementById('featuresSection').classList.add('hidden');
 
-    ensureOsmd();
+    await ensureRenderers();
     await renderLeft();
     await renderRight();
   } catch (err) {
@@ -1108,7 +1060,6 @@ downloadBtn.addEventListener('click', () => {
 /* ===================== PDF export ===================== */
 
 const downloadPdfBtn = document.getElementById('downloadPdfBtn');
-let osmdExport = null;
 
 // svg2pdf.js writes octave-shift ("8vb"/"8va") text into the PDF's text
 // stream but fails to actually paint it (a library limitation). As a
@@ -1140,12 +1091,12 @@ function stripOttavaLabels(labels) {
   labels.forEach(l => l.els.forEach(el => el.remove()));
 }
 
-function drawOttavaLabels(pdf, svgEl, pageW, pageH, labels) {
-  const vb = (svgEl.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+function drawOttavaLabels(pdf, vbAttr, pageW, pageH, labels) {
+  if (!labels.length) return;
+  const vb = vbAttr.split(/\s+/).map(Number);
   if (vb.length !== 4 || !vb[2] || !vb[3]) return;
   const scaleX = pageW / vb[2];
   const scaleY = pageH / vb[3];
-  if (!labels.length) return;
   pdf.setFont('helvetica', 'italic');
   pdf.setFontSize(10);
   pdf.setTextColor(0, 0, 0);
@@ -1154,19 +1105,61 @@ function drawOttavaLabels(pdf, svgEl, pageW, pageH, labels) {
   });
 }
 
-async function ensureOsmdExport() {
-  if (!osmdExport) {
-    osmdExport = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('exportContainer'), {
-      backend: 'svg', autoResize: false,
-      drawTitle: false, drawComposer: false, drawSubtitle: false,
-      drawPartNames: false, drawCredits: false, drawLyricist: false,
-    });
-    osmdExport.setPageFormat('A4_P');
+// Verovio's SVG nests a <svg viewBox="..."> (holding <defs> glyph shapes and
+// <use> refs to them) inside an outer <svg width="...px" height="...px">.
+// svg2pdf.js does not correctly resolve <use>/nested-<svg> coordinate systems
+// (it silently drops referenced glyph content -- noteheads, accidentals,
+// dynamics -- while plain <path> shapes like stems/beams still convert fine).
+// Flattening the nested svg into a scaled <g> and inlining every <use> as a
+// literal clone of its <defs> target makes the tree pure <g>/<path>, which
+// svg2pdf converts correctly.
+//
+// The scale must map the inner viewBox directly to targetWidth (the same
+// units passed as svg2pdf's own `width` option, e.g. the PDF page width in
+// mm) -- NOT to the outer <svg>'s declared width="...px". svg2pdf ignores a
+// root <svg> lacking its own viewBox and draws content coordinates as literal
+// output units, so scaling to the (irrelevant) px width left content ~4x too
+// large and clipped to a quarter of the page.
+function flattenVerovioSvg(svgEl, targetWidth) {
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const XLINKNS = 'http://www.w3.org/1999/xlink';
+  const inner = svgEl.querySelector('svg');
+  if (inner) {
+    const vb = (inner.getAttribute('viewBox') || '0 0 1 1').split(/\s+/).map(Number);
+    const scale = vb[2] ? targetWidth / vb[2] : 1;
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('transform', `scale(${scale})`);
+    while (inner.firstChild) g.appendChild(inner.firstChild);
+    inner.replaceWith(g);
   }
-  // "auto" (0) under-packs this piece's dense passages into only ~2
-  // measures per system; use the user's chosen fixed count instead. Read
-  // fresh every call so the density slider also affects future exports.
-  osmdExport.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktopMeasuresPerLine;
+  const idMap = {};
+  svgEl.querySelectorAll('[id]').forEach(el => { idMap[el.id] = el; });
+  svgEl.querySelectorAll('use').forEach(use => {
+    let href = use.getAttribute('href') || use.getAttributeNS(XLINKNS, 'href');
+    const target = href && idMap[href.replace(/^#/, '')];
+    if (!target) return;
+    const wrapper = document.createElementNS(SVGNS, 'g');
+    for (const attr of use.attributes) {
+      if (attr.name === 'href' || attr.name === 'xlink:href' || attr.name === 'x' || attr.name === 'y') continue;
+      wrapper.setAttribute(attr.name, attr.value);
+    }
+    const x = parseFloat(use.getAttribute('x')) || 0;
+    const y = parseFloat(use.getAttribute('y')) || 0;
+    if (x || y) {
+      wrapper.setAttribute('transform', `translate(${x}, ${y}) ${wrapper.getAttribute('transform') || ''}`);
+    }
+    const clone = target.cloneNode(true);
+    clone.removeAttribute('id');
+    while (clone.firstChild) wrapper.appendChild(clone.firstChild);
+    use.replaceWith(wrapper);
+  });
+}
+
+let vrvExport = null;
+
+async function ensureVrvExport() {
+  if (!vrvExport) vrvExport = await ensureVerovioToolkit();
+  return vrvExport;
 }
 
 downloadPdfBtn.addEventListener('click', async () => {
@@ -1174,41 +1167,45 @@ downloadPdfBtn.addEventListener('click', async () => {
   const originalLabel = downloadPdfBtn.textContent;
   downloadPdfBtn.disabled = true;
   downloadPdfBtn.textContent = 'PDF 생성 중...';
+  const exportContainer = document.getElementById('exportContainer');
   try {
-    await ensureOsmdExport();
+    await ensureVrvExport();
     const { xml } = colorizeMusicXML(rawXmlText, settings);
-    await osmdExport.load(xml);
-    // OSMD resets Zoom back to 1 on every load(), so it must be set after
-    // load() and right before render() to actually take effect.
-    osmdExport.Zoom = 0.65;
-    osmdExport.render();
-
-    const container = document.getElementById('exportContainer');
-    const svgs = Array.from(container.querySelectorAll('svg'));
-    if (svgs.length === 0) throw new Error('내보낼 악보를 렌더링하지 못했습니다.');
+    vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false });
+    vrvExport.loadData(xml);
+    const pageCount = vrvExport.getPageCount();
+    if (pageCount === 0) throw new Error('내보낼 악보를 렌더링하지 못했습니다.');
 
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
 
-    // svg2pdf.js sometimes paints octave-shift ("8vb"/"8va") text mirrored or
-    // garbled instead of skipping it (a library bug, and apparently tied to
-    // some leftover internal state that even page-scoped save/restore doesn't
-    // fix). Strip those labels from every SVG before conversion, then redraw
-    // them with jsPDF's own text API in a separate final pass over the whole
-    // document, once every page's svg2pdf conversion is fully done.
+    // svg2pdf.js needs a real (attached, laid-out) SVG element -- Verovio only
+    // gives us markup strings -- so each page is parsed and briefly attached
+    // to the offscreen export container before conversion.
+    // Octave-shift ("8vb"/"8va") labels are also redrawn directly (see
+    // findOttavaLabels/drawOttavaLabels): this was needed to work around an
+    // OSMD+svg2pdf bug and is kept as a harmless no-op safeguard here, since
+    // it silently does nothing if Verovio's SVG doesn't match that pattern.
     const pageLabels = [];
-    for (let i = 0; i < svgs.length; i++) {
+    for (let i = 0; i < pageCount; i++) {
       if (i > 0) pdf.addPage('a4', 'portrait');
-      const ottavaLabels = findOttavaLabels(svgs[i]);
+      const svgStr = vrvExport.renderToSVG(i + 1);
+      const svgEl = new DOMParser().parseFromString(svgStr, 'image/svg+xml').documentElement;
+      exportContainer.innerHTML = '';
+      exportContainer.appendChild(svgEl);
+      const viewBox = svgEl.getAttribute('viewBox') ||
+        (svgEl.querySelector('svg') ? svgEl.querySelector('svg').getAttribute('viewBox') : null) || '';
+      const ottavaLabels = findOttavaLabels(svgEl);
       stripOttavaLabels(ottavaLabels);
-      await window.svg2pdf.svg2pdf(svgs[i], pdf, { x: 0, y: 0, width: pageW, height: pageH });
-      pageLabels.push({ svg: svgs[i], labels: ottavaLabels });
+      flattenVerovioSvg(svgEl, pageW);
+      await window.svg2pdf.svg2pdf(svgEl, pdf, { x: 0, y: 0, width: pageW, height: pageH });
+      pageLabels.push({ viewBox, labels: ottavaLabels });
     }
     pageLabels.forEach((entry, idx) => {
       pdf.setPage(idx + 1);
-      drawOttavaLabels(pdf, entry.svg, pageW, pageH, entry.labels);
+      drawOttavaLabels(pdf, entry.viewBox, pageW, pageH, entry.labels);
     });
 
     pdf.save(fileBase + '_colored.pdf');
@@ -1216,6 +1213,7 @@ downloadPdfBtn.addEventListener('click', async () => {
     console.error(err);
     setGlobalError('PDF 생성 오류: ' + err.message);
   } finally {
+    exportContainer.innerHTML = '';
     downloadPdfBtn.disabled = false;
     downloadPdfBtn.textContent = originalLabel;
   }
@@ -1252,6 +1250,28 @@ document.getElementById('heroUploadBtn').addEventListener('click', () => fileInp
 heroSection.addEventListener('drop', e => {
   const file = e.dataTransfer.files[0];
   if (file) handleFile(file);
+});
+
+// Sample scores let visitors try the tool without their own file.
+[document.getElementById('sampleBtn1'), document.getElementById('sampleBtn2')].forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '불러오는 중...';
+    try {
+      const resp = await fetch(btn.dataset.src);
+      if (!resp.ok) throw new Error('샘플 파일을 불러오지 못했습니다.');
+      const buf = await resp.arrayBuffer();
+      const file = new File([buf], btn.dataset.name);
+      await handleFile(file);
+    } catch (err) {
+      console.error(err);
+      setGlobalError('샘플 로드 오류: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
 });
 </script>
 </body>
