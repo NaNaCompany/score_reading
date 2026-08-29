@@ -607,11 +607,16 @@
 
       <div class="settings-group">
         <h2>셈여림표</h2>
-        <div class="setting-note">p, f, mp, mf, sfz 같은 강약 기호에 색을 입혀요. 브라우저 렌더링 라이브러리 한계로 이 색은 <b>미리보기와 PDF에는 표시되지 않고</b>, 아래 MusicXML 파일을 다운로드해 MuseScore 등에서 열어야 반영돼요.</div>
+        <div class="setting-note">f, mf, sf, ff 같이 강하게 치라는 기호와 p, mp, pp 같이 여리게 치라는 기호를 각각 다른 색으로 표시해요.</div>
         <div class="setting-row">
-          <label class="toggle"><input type="checkbox" id="toggle-dynamics"><span class="track"><span class="thumb"></span></span></label>
-          <span class="setting-label">강약 기호 색칠</span>
-          <input type="color" class="swatch" id="color-dynamics" value="#ff8800">
+          <label class="toggle"><input type="checkbox" id="toggle-dynamicsLoud"><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">강하게 (f, mf, sf, ff...)</span>
+          <input type="color" class="swatch" id="color-dynamicsLoud" value="#ff8800">
+        </div>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-dynamicsSoft"><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">여리게 (p, mp, pp...)</span>
+          <input type="color" class="swatch" id="color-dynamicsSoft" value="#2266ee">
         </div>
       </div>
 
@@ -661,6 +666,31 @@ function keyDefault(step, fifths) {
 }
 
 const INSERT_BEFORE = new Set(['notehead-text', 'staff', 'beam', 'notations', 'lyric', 'play', 'listen']);
+
+// Classifies a MusicXML <dynamics> child tag (e.g. <f/>, <mp/>) as an
+// instruction to play loudly or softly, for the two-color dynamics setting.
+// Mixed marks (fp, sfp, sfzp, sfpp) are classified by their dominant/leading
+// accent rather than split; "n" (niente) and bare "m" aren't a volume level
+// so they're left uncategorized.
+const DYNAMIC_TAG_CATEGORY = {
+  p: 'soft', pp: 'soft', ppp: 'soft', pppp: 'soft', ppppp: 'soft', pppppp: 'soft',
+  mp: 'soft', pf: 'soft',
+  f: 'loud', ff: 'loud', fff: 'loud', ffff: 'loud', fffff: 'loud', ffffff: 'loud',
+  mf: 'loud', sf: 'loud', sfp: 'loud', sfpp: 'loud', fp: 'loud',
+  rf: 'loud', rfz: 'loud', sfz: 'loud', sfzp: 'loud', fz: 'loud', sfzfz: 'loud',
+};
+// SMuFL codepoints Verovio uses to render each dynamics ligature, keyed the
+// same way -- used to recognize and color dynamics text in Verovio's SVG
+// output after the fact, since Verovio's MusicXML importer does not read a
+// color attribute from <dynamics>/<direction> at all (confirmed against its
+// source: ReadMusicXmlDirection never transfers @color onto the Dynam it
+// creates), unlike notehead color which it fully supports.
+const DYNAMIC_CODEPOINT_CATEGORY = {
+  E520: 'soft', E529: 'soft', E52A: 'soft', E52B: 'soft', E52C: 'soft', E52E: 'soft',
+  E522: 'loud', E52D: 'loud', E52F: 'loud', E530: 'loud', E531: 'loud', E534: 'loud',
+  E535: 'loud', E536: 'loud', E537: 'loud', E538: 'loud', E539: 'loud', E53A: 'loud',
+  E53C: 'loud', E53D: 'loud', E523: 'loud', E524: 'loud',
+};
 
 // Reads any title/composer already present in the file (checked in the same
 // order most notation software writes it) so the input fields can be
@@ -832,12 +862,16 @@ function colorizeMusicXML(xmlText, settings, titleInfo) {
     });
   });
 
-  if (settings.dynamics && settings.dynamics.enabled) {
-    Array.from(doc.getElementsByTagName('dynamics')).forEach(el => {
-      el.setAttribute('color', settings.dynamics.color);
+  Array.from(doc.getElementsByTagName('dynamics')).forEach(el => {
+    const mark = el.firstElementChild;
+    if (!mark) return;
+    const category = DYNAMIC_TAG_CATEGORY[mark.tagName];
+    const key = category === 'loud' ? 'dynamicsLoud' : category === 'soft' ? 'dynamicsSoft' : null;
+    if (key && settings[key] && settings[key].enabled) {
+      el.setAttribute('color', settings[key].color);
       stats.dynamics++;
-    });
-  }
+    }
+  });
   if (settings.expression && settings.expression.enabled) {
     ['slur', 'tied', 'wedge'].forEach(tag => {
       Array.from(doc.getElementsByTagName(tag)).forEach(el => {
@@ -940,7 +974,8 @@ const settings = {
   doubleSharp: { enabled: true,  color: '#00adca' },
   flat:        { enabled: true,  color: '#ca00ad' },
   doubleFlat:  { enabled: true,  color: '#ca00ad' },
-  dynamics:    { enabled: false, color: '#ff8800' },
+  dynamicsLoud: { enabled: false, color: '#ff8800' },
+  dynamicsSoft: { enabled: false, color: '#2266ee' },
   expression:  { enabled: false, color: '#22aa55' },
 };
 
@@ -952,7 +987,8 @@ const NEUTRAL_SETTINGS = {
   doubleSharp: { enabled: false, color: '#000000' },
   flat:        { enabled: false, color: '#000000' },
   doubleFlat:  { enabled: false, color: '#000000' },
-  dynamics:    { enabled: false, color: '#000000' },
+  dynamicsLoud: { enabled: false, color: '#000000' },
+  dynamicsSoft: { enabled: false, color: '#000000' },
   expression:  { enabled: false, color: '#000000' },
 };
 
@@ -1025,6 +1061,8 @@ function renderCurrentPage() {
     const svg = el.querySelector('svg');
     if (svg) enlargeCreditText(svg, previewTitle, TITLE_SCALE_FACTOR);
   });
+  const rightSvg = rightEl.querySelector('svg');
+  if (rightSvg) colorDynamicsInSvg(rightSvg, settings);
   document.getElementById('pagerLabel').textContent = `${pagerState.current + 1} / ${pagerState.total}`;
   document.getElementById('pagerPrev').disabled = pagerState.current === 0;
   document.getElementById('pagerNext').disabled = pagerState.current >= pagerState.total - 1;
@@ -1150,7 +1188,8 @@ bindRow('sharp', 'toggle-sharp', 'color-sharp', scheduleRenderRight);
 bindRow('doubleSharp', 'toggle-doubleSharp', 'color-doubleSharp', scheduleRenderRight);
 bindRow('flat', 'toggle-flat', 'color-flat', scheduleRenderRight);
 bindRow('doubleFlat', 'toggle-doubleFlat', 'color-doubleFlat', scheduleRenderRight);
-bindRow('dynamics', 'toggle-dynamics', 'color-dynamics', () => { colorizeForDownloadOnly(); });
+bindRow('dynamicsLoud', 'toggle-dynamicsLoud', 'color-dynamicsLoud', scheduleRenderRight);
+bindRow('dynamicsSoft', 'toggle-dynamicsSoft', 'color-dynamicsSoft', scheduleRenderRight);
 bindRow('expression', 'toggle-expression', 'color-expression', () => { colorizeForDownloadOnly(); });
 
 // Title/composer re-render on demand (via the "적용" button or Enter), not
@@ -1298,6 +1337,35 @@ function enlargeCreditText(svgRoot, textContent, scaleFactor) {
 
 const TITLE_SCALE_FACTOR = 2.4;
 
+// Colors dynamics markings (p, mf, sf, ...) in an already-rendered Verovio
+// SVG by recognizing which SMuFL glyph each <g class="dynam"> uses (see
+// DYNAMIC_CODEPOINT_CATEGORY) -- necessary because Verovio's MusicXML import
+// never reads a color attribute for dynamics/direction at all, so setting
+// @color in the source XML (still done for the downloadable MusicXML, which
+// other notation software does read) has no effect on Verovio's own output.
+// Run this before flattenVerovioSvg for the PDF path: it inlines each <use>
+// into a clone wrapped in a <g> copying the <use>'s own attributes, so
+// setting fill/color on the <g class="dynam"> ancestor (left untouched by
+// flatten) still cascades correctly afterward.
+function colorDynamicsInSvg(svgRoot, settings) {
+  const XLINKNS = 'http://www.w3.org/1999/xlink';
+  svgRoot.querySelectorAll('g.dynam').forEach(g => {
+    const uses = Array.from(g.querySelectorAll('use'));
+    if (!uses.length) return;
+    const categories = new Set(uses.map(u => {
+      const href = u.getAttribute('href') || u.getAttributeNS(XLINKNS, 'href') || '';
+      const m = href.match(/#([0-9A-Fa-f]{4})/);
+      return m ? DYNAMIC_CODEPOINT_CATEGORY[m[1].toUpperCase()] : null;
+    }).filter(Boolean));
+    if (categories.size !== 1) return;
+    const key = [...categories][0] === 'loud' ? 'dynamicsLoud' : 'dynamicsSoft';
+    if (settings[key] && settings[key].enabled) {
+      g.setAttribute('fill', settings[key].color);
+      g.setAttribute('color', settings[key].color);
+    }
+  });
+}
+
 // Verovio's SVG nests a <svg viewBox="..."> (holding <defs> glyph shapes and
 // <use> refs to them) inside an outer <svg width="...px" height="...px">.
 // svg2pdf.js does not correctly resolve <use>/nested-<svg> coordinate systems
@@ -1409,6 +1477,7 @@ downloadPdfBtn.addEventListener('click', async () => {
       const ottavaLabels = findOttavaLabels(svgEl);
       stripOttavaLabels(ottavaLabels);
       enlargeCreditText(svgEl, titleInfo.title, TITLE_SCALE_FACTOR);
+      colorDynamicsInSvg(svgEl, settings);
       flattenVerovioSvg(svgEl, contentW, offsetX, offsetY);
       await window.svg2pdf.svg2pdf(svgEl, pdf, { x: 0, y: 0, width: pageW, height: pageH });
       // Footer row: brand logo centered; page number on the outer edge
