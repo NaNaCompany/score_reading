@@ -1007,8 +1007,8 @@ async function ensureRenderers() {
 
 function verovioOptions(desktop) {
   return desktop
-    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false }
-    : { pageWidth: 1500, pageHeight: 60000, scale: 32, breaks: 'auto', adjustPageHeight: true };
+    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none' }
+    : { pageWidth: 1500, pageHeight: 60000, scale: 32, breaks: 'auto', adjustPageHeight: true, footer: 'none' };
 }
 
 const pagerState = { current: 0, total: 1 };
@@ -1365,7 +1365,7 @@ downloadPdfBtn.addEventListener('click', async () => {
     await ensureVrvExport();
     const titleInfo = getTitleInfo();
     const { xml } = colorizeMusicXML(rawXmlText, settings, titleInfo);
-    vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false });
+    vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none' });
     vrvExport.loadData(xml);
     const pageCount = vrvExport.getPageCount();
     if (pageCount === 0) throw new Error('내보낼 악보를 렌더링하지 못했습니다.');
