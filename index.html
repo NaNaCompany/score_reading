@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>초견 도우미</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet">
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9767176956440077"
+     crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@2.1.2/build/opensheetmusicdisplay.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.4/dist/svg2pdf.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #fbf3ea;
+    --card: #ffffff;
+    --border: #f0e2d0;
+    --text: #2b1f18;
+    --sub: #8a7d6f;
+    --cyan: #00ccee;
+    --magenta: #ee00cc;
+    --accent: #4f7cff;
+    --orange1: #f4a95f;
+    --orange2: #e2764f;
+    --purple: #8b7cf6;
+    --purple-bg: #eee9fd;
+    --orange-bg: #fdece0;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  body { padding: 24px; }
+  .wrap { width: 100%; max-width: 1200px; margin: 0 auto; }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 34px;
+  }
+  .brand-logo {
+    height: 36px;
+    width: auto;
+    display: block;
+  }
+  .nav-links {
+    display: flex;
+    gap: 28px;
+  }
+  .nav-links a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 15px;
+    font-weight: 600;
+    opacity: .75;
+  }
+  .nav-links a:hover { opacity: 1; }
+
+  /* hero */
+  .hero {
+    display: flex;
+    align-items: center;
+    gap: 48px;
+    margin-bottom: 56px;
+  }
+  .hero-left { flex: 1; min-width: 0; }
+  .hero-right {
+    flex: 1;
+    min-width: 0;
+    background: var(--card);
+    border-radius: 22px;
+    box-shadow: 0 20px 50px rgba(120, 90, 60, .12);
+    padding: 22px;
+  }
+  .hero-right img { width: 100%; height: auto; display: block; }
+  .hero-title {
+    font-family: 'Black Han Sans', -apple-system, sans-serif;
+    font-weight: normal;
+    font-size: 44px;
+    line-height: 1.3;
+    margin: 0 0 18px;
+  }
+  .hero-title .accent-text {
+    background: linear-gradient(90deg, var(--orange1), var(--orange2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .hero-sub {
+    font-size: 15px;
+    color: var(--sub);
+    line-height: 1.7;
+    margin: 0 0 26px;
+  }
+  .cta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    border-radius: 999px;
+    padding: 15px 30px;
+    font-size: 16px;
+    font-weight: 700;
+    color: white;
+    cursor: pointer;
+    background: linear-gradient(135deg, var(--orange1), var(--orange2));
+    box-shadow: 0 10px 24px rgba(226, 118, 79, .35);
+  }
+  .cta-btn:hover { filter: brightness(1.05); }
+  .format-note {
+    margin: 12px 0 20px;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .pill {
+    display: inline-block;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .pill-orange { background: var(--orange-bg); color: var(--orange2); }
+  .pill-purple { background: var(--purple-bg); color: var(--purple); }
+
+  /* feature cards */
+  .features {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 40px;
+  }
+  .feature-card {
+    flex: 1;
+    background: var(--card);
+    border-radius: 18px;
+    padding: 22px;
+    border: 1px solid var(--border);
+  }
+  .feature-icon {
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; font-weight: 700;
+    margin-bottom: 14px;
+  }
+  .feature-icon.orange { background: var(--orange-bg); color: var(--orange2); }
+  .feature-icon.purple { background: var(--purple-bg); color: var(--purple); }
+  .feature-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+  .feature-desc { font-size: 13px; color: var(--sub); line-height: 1.6; }
+
+  @media (max-width: 860px) {
+    .hero { flex-direction: column; }
+    .features { flex-direction: column; }
+  }
+
+  /* drop zone: hidden pre-upload (the hero is the entry point), shown as a
+     slim status bar once a file is loaded */
+  #drop {
+    display: none;
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, padding .2s;
+    background: var(--card);
+  }
+  #drop.hover { border-color: var(--orange2); background: var(--orange-bg); }
+  #drop .icon { font-size: 40px; margin-bottom: 12px; }
+  #drop .main { font-size: 15px; margin-bottom: 4px; }
+  #drop .hint { font-size: 13px; color: var(--sub); }
+  #fileInput { display: none; }
+
+  #drop.compact {
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: left;
+  }
+  #drop.compact .icon { display:none; }
+  #drop.compact .hint { display:none; }
+  #drop.compact .main { font-size: 13px; color: var(--sub); }
+  #drop.compact .fname { color: var(--text); font-weight: 600; }
+  #drop.compact .reopen { color: var(--orange2); font-size: 13px; margin-left: 12px; white-space:nowrap; cursor: pointer; }
+
+  .hero.hidden, .features.hidden { display: none; }
+  .hero.hover .hero-right { box-shadow: 0 0 0 3px var(--orange2), 0 20px 50px rgba(120, 90, 60, .12); }
+
+  #globalStatus {
+    margin: 10px 0;
+    font-size: 13px;
+    text-align: center;
+    color: #ff6b6b;
+    min-height: 18px;
+  }
+
+  #workspace { display: none; margin-top: 18px; }
+  #workspace.show { display: block; }
+
+  .previews {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .pane {
+    flex: 1;
+    min-width: 0;
+    background: var(--card);
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .pane-head {
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--sub);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+  }
+  .pane-head .badge {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .pane-body {
+    background: #ffffff;
+    height: 380px;
+    overflow: auto;
+    padding: 6px;
+  }
+  .pane-body .inner { min-width: 320px; }
+
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin: 14px 0 4px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .stats b { color: var(--text); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+
+  /* settings panel */
+  #settings {
+    margin-top: 22px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+  }
+  #settings h2 {
+    font-size: 14px;
+    margin: 0 0 12px;
+    color: var(--sub);
+    font-weight: 600;
+  }
+  .settings-group { margin-bottom: 18px; }
+  .settings-group:last-child { margin-bottom: 0; }
+  .setting-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 0;
+  }
+  .setting-label { flex: 1; font-size: 14px; }
+  .setting-note { font-size: 12px; color: var(--sub); margin: -2px 0 8px; line-height: 1.5; }
+
+  .toggle { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+  .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle .track {
+    position: absolute; inset: 0;
+    background: #d3d7e0; border-radius: 999px;
+    cursor: pointer; transition: background .15s;
+  }
+  .toggle .thumb {
+    position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .15s;
+  }
+  .toggle input:checked + .track { background: var(--purple); }
+  .toggle input:checked + .track .thumb { transform: translateX(16px); background: white; }
+
+  input[type=color].swatch {
+    width: 40px; height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: none;
+    cursor: pointer;
+    padding: 2px;
+    flex-shrink: 0;
+  }
+
+  #downloadPdfBtn {
+    display: block;
+    margin: 20px auto 0;
+    padding: 13px 28px;
+    border-radius: 999px;
+    border: none;
+    background: linear-gradient(135deg, var(--orange1), var(--orange2));
+    box-shadow: 0 10px 24px rgba(226, 118, 79, .3);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #downloadPdfBtn:hover { filter: brightness(1.1); }
+  #downloadPdfBtn:disabled { opacity: .6; cursor: default; }
+
+  #downloadBtn.secondary {
+    display: block;
+    margin: 10px auto 0;
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: none;
+    background: none;
+    color: var(--sub);
+    font-size: 12px;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  #downloadBtn.secondary:hover { color: var(--text); }
+
+  footer {
+    text-align: center;
+    margin-top: 22px;
+    font-size: 12px;
+    color: var(--sub);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a href="https://nanalab.kr" target="_blank" rel="noopener"><img src="logo.png" alt="NaNa Lab" class="brand-logo"></a>
+    <nav class="nav-links">
+      <a href="#featuresSection">사용법</a>
+    </nav>
+  </div>
+
+  <section class="hero" id="heroSection">
+    <div class="hero-left">
+      <h1 class="hero-title">처음 보는 악보,<br><span class="accent-text">헷갈리는 음만 색으로.</span></h1>
+      <p class="hero-sub">샵은 <b style="color:var(--cyan)">시안색</b>, 플랫은 <b style="color:var(--magenta)">마젠타색</b>으로 자동 색칠해서<br>초견 연습을 더 쉽게 만들어드려요. 흰건반은 그대로 둡니다.</p>
+      <button class="cta-btn" id="heroUploadBtn">⬆ 악보 불러오기</button>
+      <div class="format-note">MusicXML · XML · MXL</div>
+      <div class="pill-row">
+        <span class="pill pill-orange">♯♭ 변화표</span>
+        <span class="pill pill-purple">𝆑 셈여림표</span>
+        <span class="pill pill-purple">🎵 아티큘레이션</span>
+      </div>
+    </div>
+    <div class="hero-right">
+      <img src="hero-snippet.png" alt="색칠된 악보 예시">
+    </div>
+  </section>
+
+  <section class="features" id="featuresSection">
+    <div class="feature-card">
+      <div class="feature-icon orange">♯♭</div>
+      <div class="feature-title">변화표</div>
+      <div class="feature-desc">놓치기 쉬운 샵·플랫·더블샵·더블플랫을 원하는 색으로 빠르게 확인하세요.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon purple">𝆑</div>
+      <div class="feature-title">셈여림표</div>
+      <div class="feature-desc">p, f, mp, mf, sfz 같은 강약 기호를 원하는 색으로 표시할 수 있어요.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon purple">🎵</div>
+      <div class="feature-title">아티큘레이션</div>
+      <div class="feature-desc">슬러·타이·크레센도·디크레센도 같은 표현 기호도 색으로 표시하세요.</div>
+    </div>
+  </section>
+
+  <div id="drop">
+    <div class="icon">🎼</div>
+    <div class="main">.musicxml / .xml / .mxl 파일을 여기로 드래그하세요</div>
+    <div class="hint">또는 클릭해서 파일 선택</div>
+    <span class="fname"></span>
+    <span class="reopen">다른 파일 열기</span>
+    <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
+  </div>
+
+  <div id="globalStatus"></div>
+
+  <div id="workspace">
+    <div class="previews">
+      <div class="pane">
+        <div class="pane-head"><span>원본</span><span class="badge" id="statusLeft"></span></div>
+        <div class="pane-body"><div class="inner" id="paneLeftInner"></div></div>
+      </div>
+      <div class="pane">
+        <div class="pane-head"><span>색칠된 버전</span><span class="badge" id="statusRight"></span></div>
+        <div class="pane-body"><div class="inner" id="paneRightInner"></div></div>
+      </div>
+    </div>
+
+    <div class="stats" id="stats">
+      <span><span class="dot" style="background:var(--cyan)"></span>샵 <b id="statSharp">0</b></span>
+      <span><span class="dot" style="background:#0088aa"></span>더블샵 <b id="statDoubleSharp">0</b></span>
+      <span><span class="dot" style="background:var(--magenta)"></span>플랫 <b id="statFlat">0</b></span>
+      <span><span class="dot" style="background:#880066"></span>더블플랫 <b id="statDoubleFlat">0</b></span>
+      <span><span class="dot" style="background:#4a4f5c"></span>흰건반 <b id="statWhite">0</b></span>
+    </div>
+
+    <div id="settings">
+      <div class="settings-group">
+        <h2>변화표</h2>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-sharp" checked><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">샵 (♯)</span>
+          <input type="color" class="swatch" id="color-sharp" value="#00ccee">
+        </div>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-doubleSharp" checked><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">더블샵 (𝄪)</span>
+          <input type="color" class="swatch" id="color-doubleSharp" value="#00ccee">
+        </div>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-flat" checked><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">플랫 (♭)</span>
+          <input type="color" class="swatch" id="color-flat" value="#ee00cc">
+        </div>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-doubleFlat" checked><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">더블플랫 (𝄫)</span>
+          <input type="color" class="swatch" id="color-doubleFlat" value="#ee00cc">
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h2>셈여림표</h2>
+        <div class="setting-note">p, f, mp, mf, sfz 같은 강약 기호에 색을 입혀요. 브라우저 렌더링 라이브러리 한계로 이 색은 <b>미리보기와 PDF에는 표시되지 않고</b>, 아래 MusicXML 파일을 다운로드해 MuseScore 등에서 열어야 반영돼요.</div>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-dynamics"><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">강약 기호 색칠</span>
+          <input type="color" class="swatch" id="color-dynamics" value="#ff8800">
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h2>아티큘레이션 (슬러 / 타이 / 크레센도·디크레센도)</h2>
+        <div class="setting-note">위와 같은 이유로 이 색도 <b>미리보기와 PDF에는 표시되지 않고</b>, 아래 MusicXML 파일을 다운로드해 노트 프로그램에서 열어야 반영돼요.</div>
+        <div class="setting-row">
+          <label class="toggle"><input type="checkbox" id="toggle-expression"><span class="track"><span class="thumb"></span></span></label>
+          <span class="setting-label">슬러/타이/크레센도·디크레센도 색칠</span>
+          <input type="color" class="swatch" id="color-expression" value="#22aa55">
+        </div>
+      </div>
+    </div>
+
+    <button id="downloadPdfBtn">🎼 색칠된 악보 PDF로 다운로드</button>
+    <button id="downloadBtn" class="secondary">MusicXML 파일로 다운로드 (편집용)</button>
+  </div>
+
+  <footer>모든 처리는 브라우저 안에서만 이루어지며 파일은 서버로 전송되지 않습니다.</footer>
+</div>
+
+<div id="exportContainer" style="position:fixed; left:-99999px; top:0; width:794px;"></div>
+
+<script>
+/* ===================== color transform core ===================== */
+
+const ACC_INFO = {
+  'sharp':         { alter: 1,  kind: 'sharp' },
+  'natural-sharp': { alter: 1,  kind: 'sharp' },
+  'quarter-sharp': { alter: 1,  kind: 'sharp' },
+  'double-sharp':  { alter: 2,  kind: 'doubleSharp' },
+  'sharp-sharp':   { alter: 2,  kind: 'doubleSharp' },
+  'flat':          { alter: -1, kind: 'flat' },
+  'natural-flat':  { alter: -1, kind: 'flat' },
+  'quarter-flat':  { alter: -1, kind: 'flat' },
+  'flat-flat':     { alter: -2, kind: 'doubleFlat' },
+  'double-flat':   { alter: -2, kind: 'doubleFlat' },
+  'natural':       { alter: 0,  kind: null },
+};
+const SHARP_ORDER = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
+const FLAT_ORDER = ['B', 'E', 'A', 'D', 'G', 'C', 'F'];
+
+function keyDefault(step, fifths) {
+  if (fifths > 0) return SHARP_ORDER.slice(0, fifths).includes(step) ? { alter: 1, kind: 'sharp' } : { alter: 0, kind: null };
+  if (fifths < 0) return FLAT_ORDER.slice(0, -fifths).includes(step) ? { alter: -1, kind: 'flat' } : { alter: 0, kind: null };
+  return { alter: 0, kind: null };
+}
+
+const INSERT_BEFORE = new Set(['notehead-text', 'staff', 'beam', 'notations', 'lyric', 'play', 'listen']);
+
+function colorizeMusicXML(xmlText, settings) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, 'application/xml');
+  if (doc.querySelector('parsererror')) {
+    throw new Error('XML을 해석할 수 없습니다 (형식이 올바른 MusicXML인지 확인해주세요).');
+  }
+  const root = doc.documentElement;
+  if (root.tagName !== 'score-partwise') {
+    throw new Error(`지원하지 않는 형식입니다: <${root.tagName}> (score-partwise만 지원).`);
+  }
+
+  const stats = { notes: 0, sharp: 0, doubleSharp: 0, flat: 0, doubleFlat: 0, white: 0, breaksRemoved: 0, dynamics: 0, expression: 0 };
+
+  const parts = Array.from(root.children).filter(c => c.tagName === 'part');
+  parts.forEach(part => {
+    let fifths = 0;
+    const measures = Array.from(part.children).filter(c => c.tagName === 'measure');
+    measures.forEach(measure => {
+      const fifthsEl = measure.querySelector(':scope > attributes > key > fifths');
+      if (fifthsEl) fifths = parseInt(fifthsEl.textContent, 10) || 0;
+
+      Array.from(measure.children).filter(c => c.tagName === 'print').forEach(printEl => {
+        if (printEl.getAttribute('new-page') || printEl.getAttribute('new-system')) {
+          measure.removeChild(printEl);
+          stats.breaksRemoved++;
+        }
+      });
+
+      const state = {};
+      const notes = Array.from(measure.children).filter(c => c.tagName === 'note');
+      notes.forEach(note => {
+        const pitch = Array.from(note.children).find(c => c.tagName === 'pitch');
+        if (!pitch) return;
+        stats.notes++;
+
+        const step = pitch.querySelector('step').textContent;
+        const octave = pitch.querySelector('octave').textContent;
+        const staffEl = Array.from(note.children).find(c => c.tagName === 'staff');
+        const staff = staffEl ? staffEl.textContent : '1';
+        const key = staff + '|' + step + '|' + octave;
+
+        const accEl = Array.from(note.children).find(c => c.tagName === 'accidental');
+        let info;
+        if (accEl) {
+          info = ACC_INFO[(accEl.textContent || '').trim()] || { alter: 0, kind: null };
+          state[key] = info;
+        } else if (key in state) {
+          info = state[key];
+        } else {
+          info = keyDefault(step, fifths);
+        }
+
+        let kind = info.alter === 0 ? null : (info.kind || (info.alter > 0 ? 'sharp' : 'flat'));
+
+        if (kind) stats[kind]++;
+        else stats.white++;
+
+        if (kind && settings[kind] && settings[kind].enabled) {
+          const notehead = doc.createElement('notehead');
+          notehead.setAttribute('color', settings[kind].color);
+          notehead.textContent = 'normal';
+          let inserted = false;
+          for (const child of Array.from(note.children)) {
+            if (INSERT_BEFORE.has(child.tagName)) {
+              note.insertBefore(notehead, child);
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) note.appendChild(notehead);
+        }
+      });
+    });
+  });
+
+  if (settings.dynamics && settings.dynamics.enabled) {
+    Array.from(doc.getElementsByTagName('dynamics')).forEach(el => {
+      el.setAttribute('color', settings.dynamics.color);
+      stats.dynamics++;
+    });
+  }
+  if (settings.expression && settings.expression.enabled) {
+    ['slur', 'tied', 'wedge'].forEach(tag => {
+      Array.from(doc.getElementsByTagName(tag)).forEach(el => {
+        el.setAttribute('color', settings.expression.color);
+        stats.expression++;
+      });
+    });
+  }
+
+  const serializer = new XMLSerializer();
+  let outStr = serializer.serializeToString(doc);
+  if (!/^<\?xml/.test(outStr)) {
+    outStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + outStr;
+  }
+  return { xml: outStr, stats };
+}
+
+/* ===================== minimal ZIP reader (for .mxl) ===================== */
+
+async function inflateRaw(bytes) {
+  const ds = new DecompressionStream('deflate-raw');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+async function readZipEntryBytes(view, u8, localHeaderOffset, compressedSize, method) {
+  const sig = view.getUint32(localHeaderOffset, true);
+  if (sig !== 0x04034b50) throw new Error('ZIP 로컬 헤더가 손상되었습니다.');
+  const nameLen = view.getUint16(localHeaderOffset + 26, true);
+  const extraLen = view.getUint16(localHeaderOffset + 28, true);
+  const dataStart = localHeaderOffset + 30 + nameLen + extraLen;
+  const raw = u8.subarray(dataStart, dataStart + compressedSize);
+  if (method === 0) return raw;
+  if (method === 8) return await inflateRaw(raw);
+  throw new Error('지원하지 않는 압축 방식입니다 (method ' + method + ').');
+}
+
+async function unzipMxl(arrayBuffer) {
+  const u8 = new Uint8Array(arrayBuffer);
+  const view = new DataView(arrayBuffer);
+
+  const maxBack = Math.min(u8.length, 65557);
+  let eocdOffset = -1;
+  for (let i = u8.length - 22; i >= u8.length - maxBack && i >= 0; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
+  }
+  if (eocdOffset === -1) throw new Error('mxl(zip) 파일 구조를 찾을 수 없습니다.');
+
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  let cdOffset = view.getUint32(eocdOffset + 16, true);
+
+  const entries = [];
+  let ptr = cdOffset;
+  for (let i = 0; i < entryCount; i++) {
+    const sig = view.getUint32(ptr, true);
+    if (sig !== 0x02014b50) throw new Error('ZIP 중앙 디렉터리가 손상되었습니다.');
+    const method = view.getUint16(ptr + 10, true);
+    const compressedSize = view.getUint32(ptr + 20, true);
+    const nameLen = view.getUint16(ptr + 28, true);
+    const extraLen = view.getUint16(ptr + 30, true);
+    const commentLen = view.getUint16(ptr + 32, true);
+    const localHeaderOffset = view.getUint32(ptr + 42, true);
+    const nameBytes = u8.subarray(ptr + 46, ptr + 46 + nameLen);
+    const name = new TextDecoder('utf-8').decode(nameBytes);
+    entries.push({ name, method, compressedSize, localHeaderOffset });
+    ptr += 46 + nameLen + extraLen + commentLen;
+  }
+
+  async function getTextByName(name) {
+    const e = entries.find(x => x.name === name);
+    if (!e) return null;
+    const bytes = await readZipEntryBytes(view, u8, e.localHeaderOffset, e.compressedSize, e.method);
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+
+  let targetName = null;
+  const containerXml = await getTextByName('META-INF/container.xml');
+  if (containerXml) {
+    const m = containerXml.match(/full-path=["']([^"']+)["']/);
+    if (m) targetName = m[1];
+  }
+  if (!targetName || !entries.find(x => x.name === targetName)) {
+    const candidate = entries.find(x => !x.name.startsWith('META-INF/') && /\.(musicxml|xml)$/i.test(x.name));
+    if (!candidate) throw new Error('mxl 안에서 MusicXML 파일을 찾지 못했습니다.');
+    targetName = candidate.name;
+  }
+
+  const text = await getTextByName(targetName);
+  if (!text) throw new Error('MusicXML 본문을 읽지 못했습니다.');
+  return text;
+}
+
+function stripBOM(s) { return s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s; }
+
+/* ===================== settings state ===================== */
+
+const settings = {
+  sharp:       { enabled: true,  color: '#00ccee' },
+  doubleSharp: { enabled: true,  color: '#00ccee' },
+  flat:        { enabled: true,  color: '#ee00cc' },
+  doubleFlat:  { enabled: true,  color: '#ee00cc' },
+  dynamics:    { enabled: false, color: '#ff8800' },
+  expression:  { enabled: false, color: '#22aa55' },
+};
+
+// Used for the left ("원본") pane: same layout normalization (forced breaks
+// stripped) as the colored pane, but no colors at all, so both panes line up
+// measure-for-measure for synced scrolling.
+const NEUTRAL_SETTINGS = {
+  sharp:       { enabled: false, color: '#000000' },
+  doubleSharp: { enabled: false, color: '#000000' },
+  flat:        { enabled: false, color: '#000000' },
+  doubleFlat:  { enabled: false, color: '#000000' },
+  dynamics:    { enabled: false, color: '#000000' },
+  expression:  { enabled: false, color: '#000000' },
+};
+
+const MEASURES_PER_LINE = 4;
+
+/* ===================== UI wiring ===================== */
+
+const dropEl = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const globalStatus = document.getElementById('globalStatus');
+const workspace = document.getElementById('workspace');
+const statusLeft = document.getElementById('statusLeft');
+const statusRight = document.getElementById('statusRight');
+const downloadBtn = document.getElementById('downloadBtn');
+
+let rawXmlText = null;
+let fileBase = 'score';
+let lastColoredXml = null;
+let osmdLeft = null, osmdRight = null;
+
+function setGlobalError(msg) { globalStatus.textContent = msg || ''; }
+
+function ensureOsmd() {
+  const compactOpts = {
+    autoResize: true, backend: 'svg',
+    drawTitle: false, drawComposer: false, drawSubtitle: false,
+    drawPartNames: false, drawCredits: false, drawLyricist: false,
+  };
+  if (!osmdLeft) {
+    osmdLeft = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('paneLeftInner'), compactOpts);
+    osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = MEASURES_PER_LINE;
+  }
+  if (!osmdRight) {
+    osmdRight = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('paneRightInner'), compactOpts);
+    osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = MEASURES_PER_LINE;
+  }
+  linkPaneScroll();
+}
+
+let scrollLinked = false;
+function linkPaneScroll() {
+  if (scrollLinked) return;
+  scrollLinked = true;
+  const left = document.querySelector('#paneLeftInner').closest('.pane-body');
+  const right = document.querySelector('#paneRightInner').closest('.pane-body');
+  let syncing = false;
+  function link(a, b) {
+    a.addEventListener('scroll', () => {
+      if (syncing) return;
+      syncing = true;
+      b.scrollTop = a.scrollTop;
+      b.scrollLeft = a.scrollLeft;
+      syncing = false;
+    });
+  }
+  link(left, right);
+  link(right, left);
+}
+
+function updateStatsUI(stats) {
+  document.getElementById('statSharp').textContent = stats.sharp;
+  document.getElementById('statDoubleSharp').textContent = stats.doubleSharp;
+  document.getElementById('statFlat').textContent = stats.flat;
+  document.getElementById('statDoubleFlat').textContent = stats.doubleFlat;
+  document.getElementById('statWhite').textContent = stats.white;
+}
+
+async function renderLeft() {
+  statusLeft.textContent = '렌더링 중...';
+  try {
+    const { xml } = colorizeMusicXML(rawXmlText, NEUTRAL_SETTINGS);
+    await osmdLeft.load(xml);
+    osmdLeft.render();
+    statusLeft.textContent = '';
+  } catch (err) {
+    console.error(err);
+    statusLeft.textContent = '렌더링 실패';
+  }
+}
+
+async function renderRight() {
+  statusRight.textContent = '렌더링 중...';
+  try {
+    const { xml, stats } = colorizeMusicXML(rawXmlText, settings);
+    lastColoredXml = xml;
+    updateStatsUI(stats);
+    await osmdRight.load(xml);
+    osmdRight.render();
+    statusRight.textContent = '';
+  } catch (err) {
+    console.error(err);
+    statusRight.textContent = '렌더링 실패';
+    setGlobalError('오류: ' + err.message);
+  }
+}
+
+let debounceTimer = null;
+function scheduleRenderRight() {
+  clearTimeout(debounceTimer);
+  statusRight.textContent = '업데이트 중...';
+  debounceTimer = setTimeout(() => { renderRight(); }, 200);
+}
+
+function bindRow(key, toggleId, colorId, onChange) {
+  const toggle = document.getElementById(toggleId);
+  const color = document.getElementById(colorId);
+  toggle.checked = settings[key].enabled;
+  color.value = settings[key].color;
+  toggle.addEventListener('change', () => {
+    settings[key].enabled = toggle.checked;
+    onChange();
+  });
+  color.addEventListener('input', () => {
+    settings[key].color = color.value;
+    onChange();
+  });
+}
+
+bindRow('sharp', 'toggle-sharp', 'color-sharp', scheduleRenderRight);
+bindRow('doubleSharp', 'toggle-doubleSharp', 'color-doubleSharp', scheduleRenderRight);
+bindRow('flat', 'toggle-flat', 'color-flat', scheduleRenderRight);
+bindRow('doubleFlat', 'toggle-doubleFlat', 'color-doubleFlat', scheduleRenderRight);
+bindRow('dynamics', 'toggle-dynamics', 'color-dynamics', () => { colorizeForDownloadOnly(); });
+bindRow('expression', 'toggle-expression', 'color-expression', () => { colorizeForDownloadOnly(); });
+
+function colorizeForDownloadOnly() {
+  // dynamics/expression colors don't render in the OSMD preview (library limitation),
+  // but must still be reflected in the downloadable file.
+  try {
+    const { xml, stats } = colorizeMusicXML(rawXmlText, settings);
+    lastColoredXml = xml;
+    updateStatsUI(stats);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function handleFile(file) {
+  setGlobalError('');
+  try {
+    const buf = await file.arrayBuffer();
+    const head = new Uint8Array(buf.slice(0, 4));
+    let xmlText;
+    if (head[0] === 0x50 && head[1] === 0x4b) {
+      xmlText = await unzipMxl(buf);
+    } else {
+      xmlText = stripBOM(new TextDecoder('utf-8').decode(buf));
+    }
+    rawXmlText = xmlText;
+    fileBase = file.name.replace(/\.(mxl|musicxml|xml)$/i, '');
+
+    dropEl.classList.add('compact');
+    dropEl.querySelector('.fname').textContent = file.name;
+    workspace.classList.add('show');
+    document.getElementById('heroSection').classList.add('hidden');
+    document.getElementById('featuresSection').classList.add('hidden');
+
+    ensureOsmd();
+    await renderLeft();
+    await renderRight();
+  } catch (err) {
+    console.error(err);
+    setGlobalError('오류: ' + err.message);
+  }
+}
+
+downloadBtn.addEventListener('click', () => {
+  if (!lastColoredXml) return;
+  const blob = new Blob([lastColoredXml], { type: 'application/vnd.recordare.musicxml+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileBase + '_colored.musicxml';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
+
+/* ===================== PDF export ===================== */
+
+const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+let osmdExport = null;
+
+async function ensureOsmdExport() {
+  if (!osmdExport) {
+    osmdExport = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('exportContainer'), {
+      backend: 'svg', autoResize: false,
+    });
+    osmdExport.setPageFormat('A4_P');
+  }
+}
+
+downloadPdfBtn.addEventListener('click', async () => {
+  if (!rawXmlText) return;
+  const originalLabel = downloadPdfBtn.textContent;
+  downloadPdfBtn.disabled = true;
+  downloadPdfBtn.textContent = 'PDF 생성 중...';
+  try {
+    await ensureOsmdExport();
+    const { xml } = colorizeMusicXML(rawXmlText, settings);
+    await osmdExport.load(xml);
+    // OSMD resets Zoom back to 1 on every load(), so it must be set after
+    // load() and right before render() to actually take effect.
+    osmdExport.Zoom = 0.65;
+    osmdExport.render();
+
+    const container = document.getElementById('exportContainer');
+    const svgs = Array.from(container.querySelectorAll('svg'));
+    if (svgs.length === 0) throw new Error('내보낼 악보를 렌더링하지 못했습니다.');
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+
+    for (let i = 0; i < svgs.length; i++) {
+      if (i > 0) pdf.addPage('a4', 'portrait');
+      await window.svg2pdf.svg2pdf(svgs[i], pdf, { x: 0, y: 0, width: pageW, height: pageH });
+    }
+
+    pdf.save(fileBase + '_colored.pdf');
+  } catch (err) {
+    console.error(err);
+    setGlobalError('PDF 생성 오류: ' + err.message);
+  } finally {
+    downloadPdfBtn.disabled = false;
+    downloadPdfBtn.textContent = originalLabel;
+  }
+});
+
+dropEl.addEventListener('click', (e) => {
+  if (dropEl.classList.contains('compact')) { fileInput.click(); return; }
+  fileInput.click();
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+['dragenter', 'dragover'].forEach(evt =>
+  dropEl.addEventListener(evt, e => { e.preventDefault(); dropEl.classList.add('hover'); })
+);
+['dragleave', 'drop'].forEach(evt =>
+  dropEl.addEventListener(evt, e => { e.preventDefault(); dropEl.classList.remove('hover'); })
+);
+dropEl.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+// The hero section is the pre-upload entry point: its button opens the file
+// picker, and the whole section also accepts drag-and-drop.
+const heroSection = document.getElementById('heroSection');
+document.getElementById('heroUploadBtn').addEventListener('click', () => fileInput.click());
+['dragenter', 'dragover'].forEach(evt =>
+  heroSection.addEventListener(evt, e => { e.preventDefault(); heroSection.classList.add('hover'); })
+);
+['dragleave', 'drop'].forEach(evt =>
+  heroSection.addEventListener(evt, e => { e.preventDefault(); heroSection.classList.remove('hover'); })
+);
+heroSection.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+</script>
+</body>
+</html>
