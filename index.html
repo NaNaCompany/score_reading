@@ -404,6 +404,20 @@
     flex-shrink: 0;
   }
 
+  .text-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .text-input:focus { outline: 2px solid var(--purple); outline-offset: 1px; }
+  .text-input::placeholder { color: var(--sub); }
+
   #downloadPdfBtn {
     display: block;
     margin: 20px auto 0;
@@ -539,6 +553,19 @@
 
     <div id="settings">
       <div class="settings-group">
+        <h2>제목 / 작곡가</h2>
+        <div class="setting-note" id="titleComposerNote">악보 파일에 이미 제목·작곡가 정보가 있으면 자동으로 표시돼요. 없다면 아래에 직접 입력하세요.</div>
+        <div class="setting-row">
+          <span class="setting-label" style="flex: 0 0 60px;">제목</span>
+          <input type="text" class="text-input" id="scoreTitleInput" placeholder="예: Etude-Tableau Op. 39 No. 6">
+        </div>
+        <div class="setting-row">
+          <span class="setting-label" style="flex: 0 0 60px;">작곡가</span>
+          <input type="text" class="text-input" id="scoreComposerInput" placeholder="예: Sergei Rachmaninoff">
+        </div>
+      </div>
+
+      <div class="settings-group">
         <h2>변화표</h2>
         <div class="setting-row">
           <label class="toggle"><input type="checkbox" id="toggle-sharp" checked><span class="track"><span class="thumb"></span></span></label>
@@ -619,7 +646,96 @@ function keyDefault(step, fifths) {
 
 const INSERT_BEFORE = new Set(['notehead-text', 'staff', 'beam', 'notations', 'lyric', 'play', 'listen']);
 
-function colorizeMusicXML(xmlText, settings) {
+// Reads any title/composer already present in the file (checked in the same
+// order most notation software writes it) so the input fields can be
+// pre-filled instead of starting blank.
+function extractTitleComposer(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.querySelector('parsererror')) return { title: '', composer: '' };
+  const root = doc.documentElement;
+
+  function creditText(type) {
+    for (const credit of Array.from(root.querySelectorAll('credit'))) {
+      const t = credit.querySelector('credit-type');
+      if (t && t.textContent.trim().toLowerCase() === type) {
+        return Array.from(credit.querySelectorAll('credit-words')).map(w => w.textContent.trim()).join(' ').trim();
+      }
+    }
+    return '';
+  }
+
+  let title = creditText('title');
+  if (!title) {
+    const workTitle = root.querySelector('work > work-title');
+    const movementTitle = root.querySelector('movement-title');
+    title = (workTitle && workTitle.textContent.trim()) || (movementTitle && movementTitle.textContent.trim()) || '';
+  }
+
+  let composer = creditText('composer');
+  if (!composer) {
+    const creator = Array.from(root.querySelectorAll('identification > creator'))
+      .find(el => (el.getAttribute('type') || '').toLowerCase() === 'composer');
+    composer = (creator && creator.textContent.trim()) || '';
+  }
+
+  return { title, composer };
+}
+
+// Overwrites (or adds) the title/composer shown on page 1. Runs before the
+// note-coloring pass so both preview panes and the exported PDF/MusicXML
+// agree. Only touches a field when a non-empty value is given -- an empty
+// title/composer means "leave whatever the file already has alone".
+function applyTitleComposer(doc, titleInfo) {
+  if (!titleInfo) return;
+  const root = doc.documentElement;
+  const partList = root.querySelector('part-list');
+
+  function removeCredit(type) {
+    Array.from(root.querySelectorAll('credit')).forEach(credit => {
+      const t = credit.querySelector('credit-type');
+      if (t && t.textContent.trim().toLowerCase() === type) root.removeChild(credit);
+    });
+  }
+  // default-x/default-y are required even though justify/valign already say
+  // "centered" / "top-right": when the source file has its own <defaults>
+  // <page-layout>, Verovio positions credits using that page's declared
+  // tenths rather than the pageWidth/pageHeight we render at, and a credit
+  // with no coordinates of its own silently fails to place at all. These are
+  // tenths against the PAGE_W/PAGE_H this app always renders desktop/PDF
+  // pages at (see verovioOptions() and the PDF export's setOptions()).
+  const PAGE_W = 2100, PAGE_H = 2970;
+  function insertCredit(type, text, x, y, justify, valign, fontSize) {
+    removeCredit(type);
+    const credit = doc.createElement('credit');
+    credit.setAttribute('page', '1');
+    const creditType = doc.createElement('credit-type');
+    creditType.textContent = type;
+    const words = doc.createElement('credit-words');
+    words.setAttribute('default-x', String(x));
+    words.setAttribute('default-y', String(y));
+    words.setAttribute('justify', justify);
+    words.setAttribute('valign', valign);
+    if (fontSize) words.setAttribute('font-size', fontSize);
+    words.textContent = text;
+    credit.appendChild(creditType);
+    credit.appendChild(words);
+    root.insertBefore(credit, partList);
+  }
+
+  if (titleInfo.title) {
+    Array.from(root.getElementsByTagName('work-title')).forEach(el => el.parentNode.removeChild(el));
+    Array.from(root.getElementsByTagName('movement-title')).forEach(el => el.parentNode.removeChild(el));
+    insertCredit('title', titleInfo.title, PAGE_W / 2, PAGE_H - 70, 'center', 'top', '24');
+  }
+  if (titleInfo.composer) {
+    Array.from(root.querySelectorAll('identification > creator')).forEach(el => {
+      if ((el.getAttribute('type') || '').toLowerCase() === 'composer') el.parentNode.removeChild(el);
+    });
+    insertCredit('composer', titleInfo.composer, PAGE_W - 100, PAGE_H - 120, 'right', 'bottom', '12');
+  }
+}
+
+function colorizeMusicXML(xmlText, settings, titleInfo) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, 'application/xml');
   if (doc.querySelector('parsererror')) {
@@ -629,6 +745,8 @@ function colorizeMusicXML(xmlText, settings) {
   if (root.tagName !== 'score-partwise') {
     throw new Error(`지원하지 않는 형식입니다: <${root.tagName}> (score-partwise만 지원).`);
   }
+
+  applyTitleComposer(doc, titleInfo);
 
   const stats = { notes: 0, sharp: 0, doubleSharp: 0, flat: 0, doubleFlat: 0, white: 0, breaksRemoved: 0, dynamics: 0, expression: 0 };
 
@@ -939,10 +1057,17 @@ function updateModeUI() {
   document.querySelector('#paneRightInner').closest('.pane-body').classList.toggle('paged', desktop);
 }
 
+function getTitleInfo() {
+  return {
+    title: document.getElementById('scoreTitleInput').value.trim(),
+    composer: document.getElementById('scoreComposerInput').value.trim(),
+  };
+}
+
 async function renderLeft() {
   statusLeft.textContent = '렌더링 중...';
   try {
-    const { xml } = colorizeMusicXML(rawXmlText, NEUTRAL_SETTINGS);
+    const { xml } = colorizeMusicXML(rawXmlText, NEUTRAL_SETTINGS, getTitleInfo());
     updateModeUI();
     vrvLeft.setOptions(verovioOptions(isDesktopView()));
     vrvLeft.loadData(xml);
@@ -958,7 +1083,7 @@ async function renderLeft() {
 async function renderRight() {
   statusRight.textContent = '렌더링 중...';
   try {
-    const { xml, stats } = colorizeMusicXML(rawXmlText, settings);
+    const { xml, stats } = colorizeMusicXML(rawXmlText, settings, getTitleInfo());
     lastColoredXml = xml;
     updateStatsUI(stats);
     updateModeUI();
@@ -1003,11 +1128,19 @@ bindRow('doubleFlat', 'toggle-doubleFlat', 'color-doubleFlat', scheduleRenderRig
 bindRow('dynamics', 'toggle-dynamics', 'color-dynamics', () => { colorizeForDownloadOnly(); });
 bindRow('expression', 'toggle-expression', 'color-expression', () => { colorizeForDownloadOnly(); });
 
+['scoreTitleInput', 'scoreComposerInput'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    if (!rawXmlText) return;
+    scheduleRenderRight();
+    renderLeft();
+  });
+});
+
 function colorizeForDownloadOnly() {
   // dynamics/expression colors don't render in the OSMD preview (library limitation),
   // but must still be reflected in the downloadable file.
   try {
-    const { xml, stats } = colorizeMusicXML(rawXmlText, settings);
+    const { xml, stats } = colorizeMusicXML(rawXmlText, settings, getTitleInfo());
     lastColoredXml = xml;
     updateStatsUI(stats);
   } catch (err) {
@@ -1028,6 +1161,10 @@ async function handleFile(file) {
     }
     rawXmlText = xmlText;
     fileBase = file.name.replace(/\.(mxl|musicxml|xml)$/i, '');
+
+    const existingTitleInfo = extractTitleComposer(xmlText);
+    document.getElementById('scoreTitleInput').value = existingTitleInfo.title;
+    document.getElementById('scoreComposerInput').value = existingTitleInfo.composer;
 
     dropEl.classList.add('compact');
     dropEl.querySelector('.fname').textContent = file.name;
@@ -1091,17 +1228,17 @@ function stripOttavaLabels(labels) {
   labels.forEach(l => l.els.forEach(el => el.remove()));
 }
 
-function drawOttavaLabels(pdf, vbAttr, pageW, pageH, labels) {
+function drawOttavaLabels(pdf, vbAttr, contentW, contentH, offsetX, offsetY, labels) {
   if (!labels.length) return;
   const vb = vbAttr.split(/\s+/).map(Number);
   if (vb.length !== 4 || !vb[2] || !vb[3]) return;
-  const scaleX = pageW / vb[2];
-  const scaleY = pageH / vb[3];
+  const scaleX = contentW / vb[2];
+  const scaleY = contentH / vb[3];
   pdf.setFont('helvetica', 'italic');
   pdf.setFontSize(10);
   pdf.setTextColor(0, 0, 0);
   labels.forEach(l => {
-    pdf.text(l.label, l.x * scaleX, l.y * scaleY);
+    pdf.text(l.label, offsetX + l.x * scaleX, offsetY + l.y * scaleY);
   });
 }
 
@@ -1120,7 +1257,7 @@ function drawOttavaLabels(pdf, vbAttr, pageW, pageH, labels) {
 // root <svg> lacking its own viewBox and draws content coordinates as literal
 // output units, so scaling to the (irrelevant) px width left content ~4x too
 // large and clipped to a quarter of the page.
-function flattenVerovioSvg(svgEl, targetWidth) {
+function flattenVerovioSvg(svgEl, targetWidth, offsetX, offsetY) {
   const SVGNS = 'http://www.w3.org/2000/svg';
   const XLINKNS = 'http://www.w3.org/1999/xlink';
   const inner = svgEl.querySelector('svg');
@@ -1128,7 +1265,7 @@ function flattenVerovioSvg(svgEl, targetWidth) {
     const vb = (inner.getAttribute('viewBox') || '0 0 1 1').split(/\s+/).map(Number);
     const scale = vb[2] ? targetWidth / vb[2] : 1;
     const g = document.createElementNS(SVGNS, 'g');
-    g.setAttribute('transform', `scale(${scale})`);
+    g.setAttribute('transform', `translate(${offsetX || 0}, ${offsetY || 0}) scale(${scale})`);
     while (inner.firstChild) g.appendChild(inner.firstChild);
     inner.replaceWith(g);
   }
@@ -1170,7 +1307,7 @@ downloadPdfBtn.addEventListener('click', async () => {
   const exportContainer = document.getElementById('exportContainer');
   try {
     await ensureVrvExport();
-    const { xml } = colorizeMusicXML(rawXmlText, settings);
+    const { xml } = colorizeMusicXML(rawXmlText, settings, getTitleInfo());
     vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false });
     vrvExport.loadData(xml);
     const pageCount = vrvExport.getPageCount();
@@ -1180,6 +1317,16 @@ downloadPdfBtn.addEventListener('click', async () => {
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
+
+    // Print/binding margin: shrink the content (aspect ratio preserved, since
+    // Verovio's viewBox already matches the A4 ratio) and center it, so a
+    // bound copy has room on both sides instead of notation running to the
+    // physical edge of the page.
+    const marginMm = 5;
+    const contentW = pageW - marginMm * 2;
+    const contentH = contentW * (pageH / pageW);
+    const offsetX = marginMm;
+    const offsetY = (pageH - contentH) / 2;
 
     // svg2pdf.js needs a real (attached, laid-out) SVG element -- Verovio only
     // gives us markup strings -- so each page is parsed and briefly attached
@@ -1199,13 +1346,13 @@ downloadPdfBtn.addEventListener('click', async () => {
         (svgEl.querySelector('svg') ? svgEl.querySelector('svg').getAttribute('viewBox') : null) || '';
       const ottavaLabels = findOttavaLabels(svgEl);
       stripOttavaLabels(ottavaLabels);
-      flattenVerovioSvg(svgEl, pageW);
+      flattenVerovioSvg(svgEl, contentW, offsetX, offsetY);
       await window.svg2pdf.svg2pdf(svgEl, pdf, { x: 0, y: 0, width: pageW, height: pageH });
       pageLabels.push({ viewBox, labels: ottavaLabels });
     }
     pageLabels.forEach((entry, idx) => {
       pdf.setPage(idx + 1);
-      drawOttavaLabels(pdf, entry.viewBox, pageW, pageH, entry.labels);
+      drawOttavaLabels(pdf, entry.viewBox, contentW, contentH, offsetX, offsetY, entry.labels);
     });
 
     pdf.save(fileBase + '_colored.pdf');
