@@ -1007,7 +1007,7 @@ async function ensureRenderers() {
 
 function verovioOptions(desktop) {
   return desktop
-    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true }
+    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 }
     : { pageWidth: 1500, pageHeight: 60000, scale: 32, breaks: 'auto', adjustPageHeight: true, footer: 'none' };
 }
 
@@ -1370,7 +1370,7 @@ downloadPdfBtn.addEventListener('click', async () => {
     await ensureVrvExport();
     const titleInfo = getTitleInfo();
     const { xml } = colorizeMusicXML(rawXmlText, settings, titleInfo);
-    vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true });
+    vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 });
     vrvExport.loadData(xml);
     const pageCount = vrvExport.getPageCount();
     if (pageCount === 0) throw new Error('내보낼 악보를 렌더링하지 못했습니다.');
@@ -1411,9 +1411,21 @@ downloadPdfBtn.addEventListener('click', async () => {
       enlargeCreditText(svgEl, titleInfo.title, TITLE_SCALE_FACTOR);
       flattenVerovioSvg(svgEl, contentW, offsetX, offsetY);
       await window.svg2pdf.svg2pdf(svgEl, pdf, { x: 0, y: 0, width: pageW, height: pageH });
+      // Footer row: brand logo centered; page number on the outer edge
+      // (right on odd pages, left on even), like a book's running footer.
+      // Drawn ourselves rather than left to Verovio, whose own auto-generated
+      // page number silently stops appearing on every page as soon as any
+      // page has a title/composer credit.
       const footerW = 30; // 3cm
       const footerH = footerW * FOOTER_IMAGE_ASPECT;
-      pdf.addImage(FOOTER_IMAGE_B64, 'JPEG', (pageW - footerW) / 2, pageH - footerH - 6, footerW, footerH);
+      const footerY = pageH - footerH - 6;
+      pdf.addImage(FOOTER_IMAGE_B64, 'JPEG', (pageW - footerW) / 2, footerY, footerW, footerH);
+      const pageNum = i + 1;
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(10);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(String(pageNum), pageNum % 2 === 1 ? pageW - marginMm : marginMm, footerY + footerH / 2 + 1,
+        { align: pageNum % 2 === 1 ? 'right' : 'left' });
       pageLabels.push({ viewBox, labels: ottavaLabels });
     }
     pageLabels.forEach((entry, idx) => {
