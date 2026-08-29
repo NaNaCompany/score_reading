@@ -54,6 +54,10 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 34px;
+    background: var(--card);
+    border-radius: 14px;
+    padding: 12px 20px;
+    box-shadow: 0 10px 24px rgba(30, 30, 35, .1);
   }
   .brand-logo {
     height: 36px;
@@ -65,11 +69,11 @@
     gap: 28px;
   }
   .nav-links a {
-    color: #ffffff;
+    color: var(--text);
     text-decoration: none;
     font-size: 15px;
     font-weight: 600;
-    opacity: .85;
+    opacity: .75;
   }
   .nav-links a:hover { opacity: 1; }
 
@@ -89,7 +93,21 @@
     box-shadow: 0 20px 50px rgba(30, 30, 35, .1);
     padding: 22px;
   }
-  .hero-right img { width: 100%; height: auto; display: block; }
+  .hero-score-stack { position: relative; width: 100%; }
+  .hero-score-img { width: 100%; height: auto; display: block; }
+  .hero-score-img.slide2 { position: absolute; top: 0; left: 0; }
+  .hero-score-img.slide1 { animation: heroFade1 8s ease-in-out infinite; }
+  .hero-score-img.slide2 { animation: heroFade2 8s ease-in-out infinite; }
+  @keyframes heroFade1 {
+    0%, 45% { opacity: 1; }
+    50%, 95% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes heroFade2 {
+    0%, 45% { opacity: 0; }
+    50%, 95% { opacity: 1; }
+    100% { opacity: 0; }
+  }
   .hero-title {
     font-family: 'Black Han Sans', -apple-system, sans-serif;
     font-weight: normal;
@@ -255,6 +273,39 @@
   }
   .pane-body .inner { min-width: 320px; }
 
+  .pager {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin: 14px 0 0;
+  }
+  .pager button {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 999px;
+    width: 34px; height: 34px;
+    font-size: 15px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .pager button:disabled { opacity: .35; cursor: default; }
+  .pager span { font-size: 13px; color: var(--sub); min-width: 60px; text-align: center; }
+
+  @media (min-width: 900px) {
+    .previews { flex-direction: row; gap: 20px; }
+    .pane-body.paged {
+      height: auto;
+      overflow: hidden;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+    .pane-body.paged .inner { min-width: 0; width: 100%; }
+    .pane-body.paged svg { width: 100% !important; height: auto !important; display: block; }
+    .pager { display: flex; }
+  }
+
   .stats {
     display: flex;
     justify-content: center;
@@ -367,10 +418,10 @@
 
   <section class="hero" id="heroSection">
     <div class="hero-left">
-      <h1 class="hero-title">처음 보는 악보,<br><span class="accent-text">헷갈리는 음만 색으로.</span></h1>
-      <p class="hero-sub">샵은 <b style="color:var(--cyan)">시안색</b>, 플랫은 <b style="color:var(--magenta)">마젠타색</b>으로 자동 색칠해서<br>초견 연습을 더 쉽게 만들어드려요. 흰건반은 그대로 둡니다.</p>
+      <h1 class="hero-title">음악 전공자를 위한<br><span class="accent-text">AI기반 초견 도우미!</span></h1>
+      <p class="hero-sub">처음 보는 악보도 빠르게 숙지할 수 있도록<br>AI가 중요 정보를 빠르게 시각화해줍니다!</p>
       <button class="cta-btn" id="heroUploadBtn">⬆ 악보 불러오기</button>
-      <div class="format-note">MusicXML · XML · MXL</div>
+      <div class="format-note">MusicXML · XML · MXL 파일 규격의 악보 인식 가능</div>
       <div class="pill-row">
         <span class="pill pill-orange">♯♭ 변화표</span>
         <span class="pill pill-purple">𝆑 셈여림표</span>
@@ -378,7 +429,10 @@
       </div>
     </div>
     <div class="hero-right">
-      <img src="hero-snippet.png" alt="색칠된 악보 예시">
+      <div class="hero-score-stack">
+        <img src="hero-snippet-1.png" alt="색칠된 악보 예시 1" class="hero-score-img slide1">
+        <img src="hero-snippet-2.png" alt="색칠된 악보 예시 2" class="hero-score-img slide2">
+      </div>
     </div>
   </section>
 
@@ -421,6 +475,12 @@
         <div class="pane-head"><span>색칠된 버전</span><span class="badge" id="statusRight"></span></div>
         <div class="pane-body"><div class="inner" id="paneRightInner"></div></div>
       </div>
+    </div>
+
+    <div class="pager" id="pager">
+      <button id="pagerPrev" type="button">◀</button>
+      <span id="pagerLabel">1 / 1</span>
+      <button id="pagerNext" type="button">▶</button>
     </div>
 
     <div class="stats" id="stats">
@@ -713,6 +773,7 @@ const NEUTRAL_SETTINGS = {
 };
 
 const MEASURES_PER_LINE = 4;
+const DESKTOP_MEASURES_PER_LINE = 5;
 
 /* ===================== UI wiring ===================== */
 
@@ -732,21 +793,64 @@ let osmdLeft = null, osmdRight = null;
 function setGlobalError(msg) { globalStatus.textContent = msg || ''; }
 
 function ensureOsmd() {
+  const desktop = isDesktopView();
+  // autoResize must be set at construction time -- toggling it afterward via
+  // the AutoResizeEnabled property does not reliably re-run OSMD's layout
+  // math, so mode (mobile continuous-scroll vs desktop paged) is decided once
+  // here and baked into the constructor options.
   const compactOpts = {
-    autoResize: true, backend: 'svg',
+    autoResize: !desktop, backend: 'svg',
     drawTitle: false, drawComposer: false, drawSubtitle: false,
     drawPartNames: false, drawCredits: false, drawLyricist: false,
   };
   if (!osmdLeft) {
     osmdLeft = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('paneLeftInner'), compactOpts);
-    osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = MEASURES_PER_LINE;
   }
   if (!osmdRight) {
     osmdRight = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('paneRightInner'), compactOpts);
-    osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = MEASURES_PER_LINE;
   }
+
+  // Mobile (continuous scroll): force >=4 measures/line so notation isn't
+  // too zoomed-in inside the small pane. Desktop (one printed page at a
+  // time): force a denser fixed count matching the PDF export, since "auto"
+  // under-packs this piece's dense passages into only ~2 measures/system.
+  osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? DESKTOP_MEASURES_PER_LINE : MEASURES_PER_LINE;
+  osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? DESKTOP_MEASURES_PER_LINE : MEASURES_PER_LINE;
+  osmdLeft.setPageFormat(desktop ? 'A4_P' : 'Endless');
+  osmdRight.setPageFormat(desktop ? 'A4_P' : 'Endless');
+  document.querySelector('#paneLeftInner').closest('.pane-body').classList.toggle('paged', desktop);
+  document.querySelector('#paneRightInner').closest('.pane-body').classList.toggle('paged', desktop);
+
   linkPaneScroll();
 }
+
+function isDesktopView() {
+  return window.matchMedia('(min-width: 900px)').matches;
+}
+
+const pagerState = { current: 0, total: 1 };
+
+function updatePager() {
+  if (!isDesktopView()) return;
+  const leftSvgs = Array.from(document.getElementById('paneLeftInner').querySelectorAll('svg'));
+  const rightSvgs = Array.from(document.getElementById('paneRightInner').querySelectorAll('svg'));
+  const total = Math.max(leftSvgs.length, rightSvgs.length, 1);
+  pagerState.total = total;
+  if (pagerState.current >= total) pagerState.current = total - 1;
+  if (pagerState.current < 0) pagerState.current = 0;
+  leftSvgs.forEach((svg, i) => { svg.style.display = (i === pagerState.current) ? '' : 'none'; });
+  rightSvgs.forEach((svg, i) => { svg.style.display = (i === pagerState.current) ? '' : 'none'; });
+  document.getElementById('pagerLabel').textContent = `${pagerState.current + 1} / ${total}`;
+  document.getElementById('pagerPrev').disabled = pagerState.current === 0;
+  document.getElementById('pagerNext').disabled = pagerState.current >= total - 1;
+}
+
+document.getElementById('pagerPrev').addEventListener('click', () => {
+  if (pagerState.current > 0) { pagerState.current--; updatePager(); }
+});
+document.getElementById('pagerNext').addEventListener('click', () => {
+  if (pagerState.current < pagerState.total - 1) { pagerState.current++; updatePager(); }
+});
 
 let scrollLinked = false;
 function linkPaneScroll() {
@@ -781,8 +885,10 @@ async function renderLeft() {
   try {
     const { xml } = colorizeMusicXML(rawXmlText, NEUTRAL_SETTINGS);
     await osmdLeft.load(xml);
+    if (isDesktopView()) osmdLeft.Zoom = 0.5;
     osmdLeft.render();
     statusLeft.textContent = '';
+    updatePager();
   } catch (err) {
     console.error(err);
     statusLeft.textContent = '렌더링 실패';
@@ -796,8 +902,10 @@ async function renderRight() {
     lastColoredXml = xml;
     updateStatsUI(stats);
     await osmdRight.load(xml);
+    if (isDesktopView()) osmdRight.Zoom = 0.5;
     osmdRight.render();
     statusRight.textContent = '';
+    updatePager();
   } catch (err) {
     console.error(err);
     statusRight.textContent = '렌더링 실패';
@@ -893,12 +1001,59 @@ downloadBtn.addEventListener('click', () => {
 const downloadPdfBtn = document.getElementById('downloadPdfBtn');
 let osmdExport = null;
 
+// svg2pdf.js writes octave-shift ("8vb"/"8va") text into the PDF's text
+// stream but fails to actually paint it (a library limitation). As a
+// workaround, find those text pairs in the source SVG (by content + close
+// proximity) and redraw them directly onto the PDF with jsPDF's own text API.
+function findOttavaLabels(svgEl) {
+  const texts = Array.from(svgEl.querySelectorAll('text'));
+  const results = [];
+  for (let i = 0; i < texts.length - 1; i++) {
+    const t0 = (texts[i].textContent || '').trim();
+    const t1 = (texts[i + 1].textContent || '').trim();
+    if ((t0 === '8' || t0 === '15') && (t1 === 'va' || t1 === 'vb' || t1 === 'ma' || t1 === 'mb')) {
+      let b0, b1;
+      try { b0 = texts[i].getBBox(); b1 = texts[i + 1].getBBox(); } catch (e) { continue; }
+      if (Math.abs(b0.y - b1.y) < 6 && (b1.x - b0.x) >= -2 && (b1.x - b0.x) < 40) {
+        results.push({ x: b0.x, y: b0.y + b0.height, label: t0 + t1, els: [texts[i], texts[i + 1]] });
+      }
+    }
+  }
+  return results;
+}
+
+// Removes the source octave-shift text from the SVG (svg2pdf.js sometimes
+// paints it mirrored/garbled instead of skipping it) so only our own
+// redrawn label remains.
+function stripOttavaLabels(labels) {
+  labels.forEach(l => l.els.forEach(el => el.remove()));
+}
+
+function drawOttavaLabels(pdf, svgEl, pageW, pageH, labels) {
+  const vb = (svgEl.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+  if (vb.length !== 4 || !vb[2] || !vb[3]) return;
+  const scaleX = pageW / vb[2];
+  const scaleY = pageH / vb[3];
+  if (!labels.length) return;
+  pdf.setFont('helvetica', 'italic');
+  pdf.setFontSize(10);
+  pdf.setTextColor(0, 0, 0);
+  labels.forEach(l => {
+    pdf.text(l.label, l.x * scaleX, l.y * scaleY);
+  });
+}
+
 async function ensureOsmdExport() {
   if (!osmdExport) {
     osmdExport = new opensheetmusicdisplay.OpenSheetMusicDisplay(document.getElementById('exportContainer'), {
       backend: 'svg', autoResize: false,
+      drawTitle: false, drawComposer: false, drawSubtitle: false,
+      drawPartNames: false, drawCredits: false, drawLyricist: false,
     });
     osmdExport.setPageFormat('A4_P');
+    // "auto" (0) under-packs this piece's dense passages into only ~2
+    // measures per system; force a denser fixed count instead.
+    osmdExport.EngravingRules.RenderXMeasuresPerLineAkaSystem = DESKTOP_MEASURES_PER_LINE;
   }
 }
 
@@ -925,10 +1080,24 @@ downloadPdfBtn.addEventListener('click', async () => {
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
 
+    // svg2pdf.js sometimes paints octave-shift ("8vb"/"8va") text mirrored or
+    // garbled instead of skipping it (a library bug, and apparently tied to
+    // some leftover internal state that even page-scoped save/restore doesn't
+    // fix). Strip those labels from every SVG before conversion, then redraw
+    // them with jsPDF's own text API in a separate final pass over the whole
+    // document, once every page's svg2pdf conversion is fully done.
+    const pageLabels = [];
     for (let i = 0; i < svgs.length; i++) {
       if (i > 0) pdf.addPage('a4', 'portrait');
+      const ottavaLabels = findOttavaLabels(svgs[i]);
+      stripOttavaLabels(ottavaLabels);
       await window.svg2pdf.svg2pdf(svgs[i], pdf, { x: 0, y: 0, width: pageW, height: pageH });
+      pageLabels.push({ svg: svgs[i], labels: ottavaLabels });
     }
+    pageLabels.forEach((entry, idx) => {
+      pdf.setPage(idx + 1);
+      drawOttavaLabels(pdf, entry.svg, pageW, pageH, entry.labels);
+    });
 
     pdf.save(fileBase + '_colored.pdf');
   } catch (err) {
