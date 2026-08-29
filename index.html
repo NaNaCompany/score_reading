@@ -21,8 +21,8 @@
     --border: #f0e2d0;
     --text: #2b1f18;
     --sub: #8a7d6f;
-    --cyan: #00ccee;
-    --magenta: #ee00cc;
+    --cyan: #00adca;
+    --magenta: #ca00ad;
     --accent: #4f7cff;
     --orange1: #f4a95f;
     --orange2: #e2764f;
@@ -292,6 +292,21 @@
   .pager button:disabled { opacity: .35; cursor: default; }
   .pager span { font-size: 13px; color: var(--sub); min-width: 60px; text-align: center; }
 
+  .density-control {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .density-control input[type=range] {
+    width: 160px;
+    accent-color: var(--purple);
+  }
+  .density-control b { color: var(--text); }
+
   @media (min-width: 900px) {
     .previews { flex-direction: row; gap: 20px; }
     .pane-body.paged {
@@ -483,6 +498,11 @@
       <button id="pagerNext" type="button">▶</button>
     </div>
 
+    <div class="density-control" id="densityControl">
+      <label for="measuresSlider">한 줄당 마디 수: <b id="measuresValue">5</b></label>
+      <input type="range" id="measuresSlider" min="2" max="8" value="5" step="1">
+    </div>
+
     <div class="stats" id="stats">
       <span><span class="dot" style="background:var(--cyan)"></span>샵 <b id="statSharp">0</b></span>
       <span><span class="dot" style="background:#0088aa"></span>더블샵 <b id="statDoubleSharp">0</b></span>
@@ -497,22 +517,22 @@
         <div class="setting-row">
           <label class="toggle"><input type="checkbox" id="toggle-sharp" checked><span class="track"><span class="thumb"></span></span></label>
           <span class="setting-label">샵 (♯)</span>
-          <input type="color" class="swatch" id="color-sharp" value="#00ccee">
+          <input type="color" class="swatch" id="color-sharp" value="#00adca">
         </div>
         <div class="setting-row">
           <label class="toggle"><input type="checkbox" id="toggle-doubleSharp" checked><span class="track"><span class="thumb"></span></span></label>
           <span class="setting-label">더블샵 (𝄪)</span>
-          <input type="color" class="swatch" id="color-doubleSharp" value="#00ccee">
+          <input type="color" class="swatch" id="color-doubleSharp" value="#00adca">
         </div>
         <div class="setting-row">
           <label class="toggle"><input type="checkbox" id="toggle-flat" checked><span class="track"><span class="thumb"></span></span></label>
           <span class="setting-label">플랫 (♭)</span>
-          <input type="color" class="swatch" id="color-flat" value="#ee00cc">
+          <input type="color" class="swatch" id="color-flat" value="#ca00ad">
         </div>
         <div class="setting-row">
           <label class="toggle"><input type="checkbox" id="toggle-doubleFlat" checked><span class="track"><span class="thumb"></span></span></label>
           <span class="setting-label">더블플랫 (𝄫)</span>
-          <input type="color" class="swatch" id="color-doubleFlat" value="#ee00cc">
+          <input type="color" class="swatch" id="color-doubleFlat" value="#ca00ad">
         </div>
       </div>
 
@@ -573,6 +593,79 @@ function keyDefault(step, fifths) {
 
 const INSERT_BEFORE = new Set(['notehead-text', 'staff', 'beam', 'notations', 'lyric', 'play', 'listen']);
 
+// Some scores redeclare a staff's already-current clef again a measure or
+// two later (harmless, but apparently enough to confuse OSMD's per-staff
+// clef tracking in piano writing with frequent hand-crossing, occasionally
+// drawing a later change on the *other* staff entirely). Stripping any
+// <clef> that doesn't actually change anything for that staff number
+// removes the ambiguity at the source.
+function dedupeRedundantClefs(doc) {
+  const parts = Array.from(doc.documentElement.children).filter(c => c.tagName === 'part');
+  parts.forEach(part => {
+    const currentClef = {};
+    const measures = Array.from(part.children).filter(c => c.tagName === 'measure');
+    measures.forEach(measure => {
+      const attrBlocks = Array.from(measure.children).filter(c => c.tagName === 'attributes');
+      attrBlocks.forEach(attrBlock => {
+        Array.from(attrBlock.children).filter(c => c.tagName === 'clef').forEach(clefEl => {
+          const num = clefEl.getAttribute('number') || '1';
+          const sign = clefEl.querySelector('sign') ? clefEl.querySelector('sign').textContent : '';
+          const line = clefEl.querySelector('line') ? clefEl.querySelector('line').textContent : '';
+          const key = sign + '|' + line;
+          if (currentClef[num] === key) {
+            attrBlock.removeChild(clefEl);
+          } else {
+            currentClef[num] = key;
+          }
+        });
+        if (attrBlock.children.length === 0) attrBlock.remove();
+      });
+    });
+  });
+}
+
+// OSMD sometimes mixes up which staff a mid-measure clef change belongs to
+// when both staves of a grand staff switch clefs in quick succession (common
+// in piano writing with hand-crossing), drawing notes against the wrong
+// clef entirely. Moving each clef-only <attributes> block to the start of
+// its measure sidesteps this: the clef for each staff is then unambiguous
+// from beat 1, at the minor cost of showing that clef slightly early for
+// whatever note(s) preceded the original change point.
+function hoistMidMeasureClefChanges(doc) {
+  const parts = Array.from(doc.documentElement.children).filter(c => c.tagName === 'part');
+  parts.forEach(part => {
+    const measures = Array.from(part.children).filter(c => c.tagName === 'measure');
+    measures.forEach(measure => {
+      const children = Array.from(measure.children);
+      const firstNoteIdx = children.findIndex(c => c.tagName === 'note');
+      if (firstNoteIdx <= 0) return;
+      const lateClefBlocks = children.filter((c, idx) =>
+        idx > firstNoteIdx && c.tagName === 'attributes' &&
+        Array.from(c.children).length > 0 &&
+        Array.from(c.children).every(k => k.tagName === 'clef')
+      );
+      if (!lateClefBlocks.length) return;
+
+      let leading = children[0].tagName === 'attributes' ? children[0] : null;
+      if (!leading) {
+        leading = doc.createElement('attributes');
+        measure.insertBefore(leading, measure.firstChild);
+      }
+      lateClefBlocks.forEach(block => {
+        Array.from(block.children).forEach(clefEl => {
+          const num = clefEl.getAttribute('number');
+          const existing = Array.from(leading.children).find(k =>
+            k.tagName === 'clef' && k.getAttribute('number') === num
+          );
+          if (existing) leading.removeChild(existing);
+          leading.appendChild(clefEl);
+        });
+        block.remove();
+      });
+    });
+  });
+}
+
 function colorizeMusicXML(xmlText, settings) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, 'application/xml');
@@ -583,6 +676,9 @@ function colorizeMusicXML(xmlText, settings) {
   if (root.tagName !== 'score-partwise') {
     throw new Error(`지원하지 않는 형식입니다: <${root.tagName}> (score-partwise만 지원).`);
   }
+
+  dedupeRedundantClefs(doc);
+  hoistMidMeasureClefChanges(doc);
 
   const stats = { notes: 0, sharp: 0, doubleSharp: 0, flat: 0, doubleFlat: 0, white: 0, breaksRemoved: 0, dynamics: 0, expression: 0 };
 
@@ -752,10 +848,10 @@ function stripBOM(s) { return s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s; }
 /* ===================== settings state ===================== */
 
 const settings = {
-  sharp:       { enabled: true,  color: '#00ccee' },
-  doubleSharp: { enabled: true,  color: '#00ccee' },
-  flat:        { enabled: true,  color: '#ee00cc' },
-  doubleFlat:  { enabled: true,  color: '#ee00cc' },
+  sharp:       { enabled: true,  color: '#00adca' },
+  doubleSharp: { enabled: true,  color: '#00adca' },
+  flat:        { enabled: true,  color: '#ca00ad' },
+  doubleFlat:  { enabled: true,  color: '#ca00ad' },
   dynamics:    { enabled: false, color: '#ff8800' },
   expression:  { enabled: false, color: '#22aa55' },
 };
@@ -773,7 +869,7 @@ const NEUTRAL_SETTINGS = {
 };
 
 const MEASURES_PER_LINE = 4;
-const DESKTOP_MEASURES_PER_LINE = 5;
+let desktopMeasuresPerLine = 5;
 
 /* ===================== UI wiring ===================== */
 
@@ -814,8 +910,9 @@ function ensureOsmd() {
   // too zoomed-in inside the small pane. Desktop (one printed page at a
   // time): force a denser fixed count matching the PDF export, since "auto"
   // under-packs this piece's dense passages into only ~2 measures/system.
-  osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? DESKTOP_MEASURES_PER_LINE : MEASURES_PER_LINE;
-  osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? DESKTOP_MEASURES_PER_LINE : MEASURES_PER_LINE;
+  osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? desktopMeasuresPerLine : MEASURES_PER_LINE;
+  osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktop ? desktopMeasuresPerLine : MEASURES_PER_LINE;
+  document.getElementById('densityControl').style.display = desktop ? 'flex' : 'none';
   osmdLeft.setPageFormat(desktop ? 'A4_P' : 'Endless');
   osmdRight.setPageFormat(desktop ? 'A4_P' : 'Endless');
   document.querySelector('#paneLeftInner').closest('.pane-body').classList.toggle('paged', desktop);
@@ -850,6 +947,18 @@ document.getElementById('pagerPrev').addEventListener('click', () => {
 });
 document.getElementById('pagerNext').addEventListener('click', () => {
   if (pagerState.current < pagerState.total - 1) { pagerState.current++; updatePager(); }
+});
+
+const measuresSlider = document.getElementById('measuresSlider');
+measuresSlider.addEventListener('input', async () => {
+  desktopMeasuresPerLine = parseInt(measuresSlider.value, 10);
+  document.getElementById('measuresValue').textContent = desktopMeasuresPerLine;
+  if (!rawXmlText || !isDesktopView()) return;
+  osmdLeft.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktopMeasuresPerLine;
+  osmdRight.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktopMeasuresPerLine;
+  pagerState.current = 0;
+  await renderLeft();
+  await renderRight();
 });
 
 let scrollLinked = false;
@@ -1015,7 +1124,9 @@ function findOttavaLabels(svgEl) {
       let b0, b1;
       try { b0 = texts[i].getBBox(); b1 = texts[i + 1].getBBox(); } catch (e) { continue; }
       if (Math.abs(b0.y - b1.y) < 6 && (b1.x - b0.x) >= -2 && (b1.x - b0.x) < 40) {
-        results.push({ x: b0.x, y: b0.y + b0.height, label: t0 + t1, els: [texts[i], texts[i + 1]] });
+        // Nudge down a bit past the baseline so the label clears the dashed
+        // extender line drawn just below the original (now-removed) text.
+        results.push({ x: b0.x, y: b0.y + b0.height * 1.35, label: t0 + t1, els: [texts[i], texts[i + 1]] });
       }
     }
   }
@@ -1051,10 +1162,11 @@ async function ensureOsmdExport() {
       drawPartNames: false, drawCredits: false, drawLyricist: false,
     });
     osmdExport.setPageFormat('A4_P');
-    // "auto" (0) under-packs this piece's dense passages into only ~2
-    // measures per system; force a denser fixed count instead.
-    osmdExport.EngravingRules.RenderXMeasuresPerLineAkaSystem = DESKTOP_MEASURES_PER_LINE;
   }
+  // "auto" (0) under-packs this piece's dense passages into only ~2
+  // measures per system; use the user's chosen fixed count instead. Read
+  // fresh every call so the density slider also affects future exports.
+  osmdExport.EngravingRules.RenderXMeasuresPerLineAkaSystem = desktopMeasuresPerLine;
 }
 
 downloadPdfBtn.addEventListener('click', async () => {
