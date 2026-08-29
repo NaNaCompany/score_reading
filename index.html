@@ -95,18 +95,22 @@
   }
   .hero-score-stack { position: relative; width: 100%; }
   .hero-score-img { width: 100%; height: auto; display: block; }
-  .hero-score-img.slide2 { position: absolute; top: 0; left: 0; }
-  .hero-score-img.slide1 { animation: heroFade1 8s ease-in-out infinite; }
-  .hero-score-img.slide2 { animation: heroFade2 8s ease-in-out infinite; }
+  .hero-score-img.slide2, .hero-score-img.slide3 { position: absolute; top: 0; left: 0; }
+  .hero-score-img.slide1 { animation: heroFade1 12s ease-in-out infinite; }
+  .hero-score-img.slide2 { animation: heroFade2 12s ease-in-out infinite; }
+  .hero-score-img.slide3 { animation: heroFade3 12s ease-in-out infinite; }
   @keyframes heroFade1 {
-    0%, 45% { opacity: 1; }
-    50%, 95% { opacity: 0; }
+    0%, 28% { opacity: 1; }
+    33%, 94% { opacity: 0; }
     100% { opacity: 1; }
   }
   @keyframes heroFade2 {
-    0%, 45% { opacity: 0; }
-    50%, 95% { opacity: 1; }
-    100% { opacity: 0; }
+    0%, 28%, 66%, 100% { opacity: 0; }
+    33%, 61% { opacity: 1; }
+  }
+  @keyframes heroFade3 {
+    0%, 61%, 100% { opacity: 0; }
+    66%, 94% { opacity: 1; }
   }
   .hero-title {
     font-family: 'Black Han Sans', -apple-system, sans-serif;
@@ -472,7 +476,7 @@
 <body>
 <div class="wrap">
   <div class="topbar">
-    <a href="https://nanalab.kr" target="_blank" rel="noopener"><img src="logo.png" alt="NaNa Lab" class="brand-logo"></a>
+    <a href="https://nanalab.kr/score_helper/" target="_blank" rel="noopener"><img src="logo.png" alt="NaNa Lab" class="brand-logo"></a>
     <nav class="nav-links">
       <a href="#featuresSection">사용법</a>
       <a href="https://github.com/NaNaCompany/score_helper" target="_blank" rel="noopener">GitHub</a>
@@ -500,6 +504,7 @@
       <div class="hero-score-stack">
         <img src="hero-snippet-1.png" alt="색칠된 악보 예시 1" class="hero-score-img slide1">
         <img src="hero-snippet-2.png" alt="색칠된 악보 예시 2" class="hero-score-img slide2">
+        <img src="hero-snippet-3.png" alt="색칠된 악보 예시 3" class="hero-score-img slide3">
       </div>
     </div>
   </section>
@@ -1063,6 +1068,10 @@ function renderCurrentPage() {
   });
   const rightSvg = rightEl.querySelector('svg');
   if (rightSvg) colorDynamicsInSvg(rightSvg, settings);
+  [leftEl, rightEl].forEach(el => {
+    const svg = el.querySelector('svg');
+    if (svg) resolveDynamicsCollisions(svg);
+  });
   document.getElementById('pagerLabel').textContent = `${pagerState.current + 1} / ${pagerState.total}`;
   document.getElementById('pagerPrev').disabled = pagerState.current === 0;
   document.getElementById('pagerNext').disabled = pagerState.current >= pagerState.total - 1;
@@ -1366,6 +1375,47 @@ function colorDynamicsInSvg(svgRoot, settings) {
   });
 }
 
+// Verovio doesn't always keep dynamics markings clear of nearby beams/stems
+// (most visible on measures with wide chords or hand-crossing, where a beam
+// reaches further than usual into the space below/above the staff where a
+// dynamic normally sits) -- so overlaps are found directly and the dynamic
+// nudged clear. Requires svgRoot to be attached and laid out (getBoundingClientRect
+// is used, since it -- unlike getBBox -- reflects any transform already
+// applied, letting this run safely after colorDynamicsInSvg/enlargeCreditText).
+function resolveDynamicsCollisions(svgRoot) {
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  }
+  function getRect(el) { try { return el.getBoundingClientRect(); } catch (e) { return null; } }
+
+  const beamBoxes = Array.from(svgRoot.querySelectorAll('g.beam, g.stem')).map(getRect).filter(Boolean);
+  if (!beamBoxes.length) return;
+  svgRoot.querySelectorAll('g.dynam').forEach(dg => {
+    const dbox = getRect(dg);
+    if (!dbox) return;
+    let ctm;
+    try { ctm = dg.getScreenCTM(); } catch (e) { ctm = null; }
+    const scaleY = ctm ? Math.hypot(ctm.b, ctm.d) : 1; // screen px per local SVG unit
+    let maxShiftPx = 0;
+    beamBoxes.forEach(bbox => {
+      if (!rectsOverlap(dbox, bbox)) return;
+      const dCenter = dbox.y + dbox.height / 2;
+      const bCenter = bbox.y + bbox.height / 2;
+      const shiftPx = dCenter >= bCenter
+        ? (bbox.y + bbox.height) - dbox.y + 6
+        : -((dbox.y + dbox.height) - bbox.y + 6);
+      if (Math.abs(shiftPx) > Math.abs(maxShiftPx)) maxShiftPx = shiftPx;
+    });
+    if (maxShiftPx !== 0) {
+      const wrapper = document.createElementNS(SVGNS, 'g');
+      wrapper.setAttribute('transform', `translate(0, ${maxShiftPx / scaleY})`);
+      dg.parentNode.insertBefore(wrapper, dg);
+      wrapper.appendChild(dg);
+    }
+  });
+}
+
 // Verovio's SVG nests a <svg viewBox="..."> (holding <defs> glyph shapes and
 // <use> refs to them) inside an outer <svg width="...px" height="...px">.
 // svg2pdf.js does not correctly resolve <use>/nested-<svg> coordinate systems
@@ -1478,6 +1528,7 @@ downloadPdfBtn.addEventListener('click', async () => {
       stripOttavaLabels(ottavaLabels);
       enlargeCreditText(svgEl, titleInfo.title, TITLE_SCALE_FACTOR);
       colorDynamicsInSvg(svgEl, settings);
+      resolveDynamicsCollisions(svgEl);
       flattenVerovioSvg(svgEl, contentW, offsetX, offsetY);
       await window.svg2pdf.svg2pdf(svgEl, pdf, { x: 0, y: 0, width: pageW, height: pageH });
       // Footer row: brand logo centered; page number on the outer edge
