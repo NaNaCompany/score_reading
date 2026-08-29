@@ -418,6 +418,19 @@
   .text-input:focus { outline: 2px solid var(--purple); outline-offset: 1px; }
   .text-input::placeholder { color: var(--sub); }
 
+  .apply-btn {
+    margin-left: auto;
+    background: var(--purple);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 20px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .apply-btn:hover { filter: brightness(1.08); }
+
   #downloadPdfBtn {
     display: block;
     margin: 20px auto 0;
@@ -562,6 +575,9 @@
         <div class="setting-row">
           <span class="setting-label" style="flex: 0 0 60px;">작곡가</span>
           <input type="text" class="text-input" id="scoreComposerInput" placeholder="예: Sergei Rachmaninoff">
+        </div>
+        <div class="setting-row">
+          <button type="button" class="apply-btn" id="applyTitleComposerBtn">적용</button>
         </div>
       </div>
 
@@ -725,7 +741,7 @@ function applyTitleComposer(doc, titleInfo) {
   if (titleInfo.title) {
     Array.from(root.getElementsByTagName('work-title')).forEach(el => el.parentNode.removeChild(el));
     Array.from(root.getElementsByTagName('movement-title')).forEach(el => el.parentNode.removeChild(el));
-    insertCredit('title', titleInfo.title, PAGE_W / 2, PAGE_H - 70, 'center', 'top', '24');
+    insertCredit('title', titleInfo.title, PAGE_W / 2, PAGE_H - 80, 'center', 'top', '34');
   }
   if (titleInfo.composer) {
     Array.from(root.querySelectorAll('identification > creator')).forEach(el => {
@@ -1128,11 +1144,18 @@ bindRow('doubleFlat', 'toggle-doubleFlat', 'color-doubleFlat', scheduleRenderRig
 bindRow('dynamics', 'toggle-dynamics', 'color-dynamics', () => { colorizeForDownloadOnly(); });
 bindRow('expression', 'toggle-expression', 'color-expression', () => { colorizeForDownloadOnly(); });
 
+// Title/composer re-render on demand (via the "적용" button or Enter), not
+// on every keystroke -- re-rendering runs the full colorize+Verovio pipeline,
+// which is too slow to do per character without visible input lag.
+function applyTitleComposerEdits() {
+  if (!rawXmlText) return;
+  renderLeft();
+  renderRight();
+}
+document.getElementById('applyTitleComposerBtn').addEventListener('click', applyTitleComposerEdits);
 ['scoreTitleInput', 'scoreComposerInput'].forEach(id => {
-  document.getElementById(id).addEventListener('input', () => {
-    if (!rawXmlText) return;
-    scheduleRenderRight();
-    renderLeft();
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') applyTitleComposerEdits();
   });
 });
 
