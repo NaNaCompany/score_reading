@@ -741,7 +741,11 @@ function applyTitleComposer(doc, titleInfo) {
   if (titleInfo.title) {
     Array.from(root.getElementsByTagName('work-title')).forEach(el => el.parentNode.removeChild(el));
     Array.from(root.getElementsByTagName('movement-title')).forEach(el => el.parentNode.removeChild(el));
-    insertCredit('title', titleInfo.title, PAGE_W / 2, PAGE_H - 80, 'center', 'top', '34');
+    // A leftover subtitle credit sits right where the now-much-larger title
+    // renders (see enlargeCreditText) and ends up overlapping it, so it's
+    // removed along with the title rather than left to collide visually.
+    removeCredit('subtitle');
+    insertCredit('title', titleInfo.title, PAGE_W / 2, PAGE_H - 110, 'center', 'top', '48');
   }
   if (titleInfo.composer) {
     Array.from(root.querySelectorAll('identification > creator')).forEach(el => {
@@ -1016,6 +1020,11 @@ function renderCurrentPage() {
   const n = desktop ? pagerState.current + 1 : 1;
   leftEl.innerHTML = vrvLeft.renderToSVG(n);
   rightEl.innerHTML = vrvRight.renderToSVG(n);
+  const previewTitle = getTitleInfo().title;
+  [leftEl, rightEl].forEach(el => {
+    const svg = el.querySelector('svg');
+    if (svg) enlargeCreditText(svg, previewTitle, TITLE_SCALE_FACTOR);
+  });
   document.getElementById('pagerLabel').textContent = `${pagerState.current + 1} / ${pagerState.total}`;
   document.getElementById('pagerPrev').disabled = pagerState.current === 0;
   document.getElementById('pagerNext').disabled = pagerState.current >= pagerState.total - 1;
@@ -1265,6 +1274,30 @@ function drawOttavaLabels(pdf, vbAttr, contentW, contentH, offsetX, offsetY, lab
   });
 }
 
+// Verovio internally caps how large a credit-words font-size can render
+// (raising the MusicXML font-size attribute past ~48 has no further effect --
+// it always tops out at the same 405px glyph size), so a genuinely large
+// title has to be done by geometrically scaling the already-rendered <text>
+// in place, anchored on its own bounding box so it grows without shifting
+// off its centered/right-aligned position. Requires svgRoot to be attached
+// (for getBBox); matches by exact text content since Verovio may still be
+// using its own internal nested-tspan structure around it.
+function enlargeCreditText(svgRoot, textContent, scaleFactor) {
+  if (!textContent) return;
+  const target = Array.from(svgRoot.querySelectorAll('text')).find(t => t.textContent.trim() === textContent.trim());
+  if (!target) return;
+  let bbox;
+  try { bbox = target.getBBox(); } catch (e) { return; }
+  const cx = bbox.x + bbox.width / 2;
+  const cy = bbox.y + bbox.height / 2;
+  const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  wrapper.setAttribute('transform', `translate(${cx}, ${cy}) scale(${scaleFactor}) translate(${-cx}, ${-cy})`);
+  target.parentNode.insertBefore(wrapper, target);
+  wrapper.appendChild(target);
+}
+
+const TITLE_SCALE_FACTOR = 2.4;
+
 // Verovio's SVG nests a <svg viewBox="..."> (holding <defs> glyph shapes and
 // <use> refs to them) inside an outer <svg width="...px" height="...px">.
 // svg2pdf.js does not correctly resolve <use>/nested-<svg> coordinate systems
@@ -1330,7 +1363,8 @@ downloadPdfBtn.addEventListener('click', async () => {
   const exportContainer = document.getElementById('exportContainer');
   try {
     await ensureVrvExport();
-    const { xml } = colorizeMusicXML(rawXmlText, settings, getTitleInfo());
+    const titleInfo = getTitleInfo();
+    const { xml } = colorizeMusicXML(rawXmlText, settings, titleInfo);
     vrvExport.setOptions({ pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false });
     vrvExport.loadData(xml);
     const pageCount = vrvExport.getPageCount();
@@ -1369,6 +1403,7 @@ downloadPdfBtn.addEventListener('click', async () => {
         (svgEl.querySelector('svg') ? svgEl.querySelector('svg').getAttribute('viewBox') : null) || '';
       const ottavaLabels = findOttavaLabels(svgEl);
       stripOttavaLabels(ottavaLabels);
+      enlargeCreditText(svgEl, titleInfo.title, TITLE_SCALE_FACTOR);
       flattenVerovioSvg(svgEl, contentW, offsetX, offsetY);
       await window.svg2pdf.svg2pdf(svgEl, pdf, { x: 0, y: 0, width: pageW, height: pageH });
       pageLabels.push({ viewBox, labels: ottavaLabels });
