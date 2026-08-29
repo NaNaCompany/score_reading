@@ -96,9 +96,9 @@
   .hero-score-stack { position: relative; width: 100%; }
   .hero-score-img { width: 100%; height: auto; display: block; }
   .hero-score-img.slide2, .hero-score-img.slide3 { position: absolute; top: 0; left: 0; }
-  .hero-score-img.slide1 { animation: heroFade1 12s ease-in-out infinite; }
-  .hero-score-img.slide2 { animation: heroFade2 12s ease-in-out infinite; }
-  .hero-score-img.slide3 { animation: heroFade3 12s ease-in-out infinite; }
+  .hero-score-img.slide1 { animation: heroFade1 6s ease-in-out infinite; }
+  .hero-score-img.slide2 { animation: heroFade2 6s ease-in-out infinite; }
+  .hero-score-img.slide3 { animation: heroFade3 6s ease-in-out infinite; }
   @keyframes heroFade1 {
     0%, 28% { opacity: 1; }
     33%, 94% { opacity: 0; }
@@ -1378,9 +1378,15 @@ function colorDynamicsInSvg(svgRoot, settings) {
 // Verovio doesn't always keep dynamics markings clear of nearby beams/stems
 // (most visible on measures with wide chords or hand-crossing, where a beam
 // reaches further than usual into the space below/above the staff where a
-// dynamic normally sits) -- so overlaps are found directly and the dynamic
-// nudged clear. Requires svgRoot to be attached and laid out (getBoundingClientRect
-// is used, since it -- unlike getBBox -- reflects any transform already
+// dynamic normally sits), or a tempo/expression word like "cresc."/"dim."
+// landing right where a dynamic already sits -- so overlaps are found
+// directly and the dynamic nudged clear. (Dynamics-vs-dynamics collisions
+// were also tried, for the rare case of 3+ markings crowded onto one beat,
+// but a single vertical nudge per marking isn't enough to untangle a chain
+// of several overlapping neighbors and made a couple of other pages worse
+// than leaving them; that case is left alone rather than risk a regression.)
+// Requires svgRoot to be attached and laid out (getBoundingClientRect is
+// used, since it -- unlike getBBox -- reflects any transform already
 // applied, letting this run safely after colorDynamicsInSvg/enlargeCreditText).
 function resolveDynamicsCollisions(svgRoot) {
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -1389,8 +1395,8 @@ function resolveDynamicsCollisions(svgRoot) {
   }
   function getRect(el) { try { return el.getBoundingClientRect(); } catch (e) { return null; } }
 
-  const beamBoxes = Array.from(svgRoot.querySelectorAll('g.beam, g.stem')).map(getRect).filter(Boolean);
-  if (!beamBoxes.length) return;
+  const obstacleBoxes = Array.from(svgRoot.querySelectorAll('g.beam, g.stem, g.dir')).map(getRect).filter(Boolean);
+  if (!obstacleBoxes.length) return;
   svgRoot.querySelectorAll('g.dynam').forEach(dg => {
     const dbox = getRect(dg);
     if (!dbox) return;
@@ -1398,7 +1404,7 @@ function resolveDynamicsCollisions(svgRoot) {
     try { ctm = dg.getScreenCTM(); } catch (e) { ctm = null; }
     const scaleY = ctm ? Math.hypot(ctm.b, ctm.d) : 1; // screen px per local SVG unit
     let maxShiftPx = 0;
-    beamBoxes.forEach(bbox => {
+    obstacleBoxes.forEach(bbox => {
       if (!rectsOverlap(dbox, bbox)) return;
       const dCenter = dbox.y + dbox.height / 2;
       const bCenter = bbox.y + bbox.height / 2;
