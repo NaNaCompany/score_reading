@@ -1378,16 +1378,24 @@ function colorDynamicsInSvg(svgRoot, settings) {
 // Verovio doesn't always keep dynamics markings clear of nearby beams/stems
 // (most visible on measures with wide chords or hand-crossing, where a beam
 // reaches further than usual into the space below/above the staff where a
-// dynamic normally sits), or a tempo/expression word like "cresc."/"dim."
-// landing right where a dynamic already sits -- so overlaps are found
-// directly and the dynamic nudged clear. (Dynamics-vs-dynamics collisions
-// were also tried, for the rare case of 3+ markings crowded onto one beat,
-// but a single vertical nudge per marking isn't enough to untangle a chain
-// of several overlapping neighbors and made a couple of other pages worse
-// than leaving them; that case is left alone rather than risk a regression.)
+// dynamic normally sits), a tempo/expression word like "cresc."/"dim."
+// landing right where a dynamic already sits (rendered as g.dir in some
+// cases but, when Verovio treats it as part of one combined dynamics
+// instruction -- e.g. "mf cresc." -- as another g.dynam in others), or two
+// such markings landing on each other directly -- so overlaps are found
+// directly and the dynamic nudged clear.
+//
+// Dynamics-vs-dynamics is only resolved for a clean 1-to-1 overlap (exactly
+// one other dynam involved); a chain of 3+ crowded onto one beat is left
+// alone, since a single vertical nudge per marking isn't enough to untangle
+// a whole chain and attempting it made a couple of other pages worse than
+// leaving them.
+//
 // Requires svgRoot to be attached and laid out (getBoundingClientRect is
 // used, since it -- unlike getBBox -- reflects any transform already
-// applied, letting this run safely after colorDynamicsInSvg/enlargeCreditText).
+// applied, letting this run safely after colorDynamicsInSvg/enlargeCreditText,
+// and letting one dynamic's shift earlier in this same pass be seen by the
+// next dynamic's collision check against it).
 function resolveDynamicsCollisions(svgRoot) {
   const SVGNS = 'http://www.w3.org/2000/svg';
   function rectsOverlap(a, b) {
@@ -1395,23 +1403,55 @@ function resolveDynamicsCollisions(svgRoot) {
   }
   function getRect(el) { try { return el.getBoundingClientRect(); } catch (e) { return null; } }
 
-  const obstacleBoxes = Array.from(svgRoot.querySelectorAll('g.beam, g.stem, g.dir')).map(getRect).filter(Boolean);
-  if (!obstacleBoxes.length) return;
-  svgRoot.querySelectorAll('g.dynam').forEach(dg => {
+  const staticBoxes = Array.from(svgRoot.querySelectorAll('g.beam, g.stem, g.dir')).map(getRect).filter(Boolean);
+  const dynams = Array.from(svgRoot.querySelectorAll('g.dynam'));
+  if (!staticBoxes.length && dynams.length < 2) return;
+  dynams.forEach(dg => {
     const dbox = getRect(dg);
     if (!dbox) return;
     let ctm;
     try { ctm = dg.getScreenCTM(); } catch (e) { ctm = null; }
     const scaleY = ctm ? Math.hypot(ctm.b, ctm.d) : 1; // screen px per local SVG unit
-    let maxShiftPx = 0;
-    obstacleBoxes.forEach(bbox => {
-      if (!rectsOverlap(dbox, bbox)) return;
+
+    // Other dynams are checked live (not from a snapshot) so an earlier
+    // dynamic's shift in this same pass is accounted for. Bail out (leaving
+    // this dynam untouched) the moment a second overlapping dynam turns up,
+    // rather than nudge it based on only one of several neighbors.
+    const dynamOverlaps = [];
+    for (const other of dynams) {
+      if (other === dg) continue;
+      const obox = getRect(other);
+      if (obox && rectsOverlap(dbox, obox)) {
+        dynamOverlaps.push(obox);
+        if (dynamOverlaps.length > 1) break;
+      }
+    }
+    if (dynamOverlaps.length > 1) return;
+
+    function shiftToClear(bbox) {
       const dCenter = dbox.y + dbox.height / 2;
       const bCenter = bbox.y + bbox.height / 2;
-      const shiftPx = dCenter >= bCenter
+      return dCenter >= bCenter
         ? (bbox.y + bbox.height) - dbox.y + 6
         : -((dbox.y + dbox.height) - bbox.y + 6);
+    }
+    let maxShiftPx = 0;
+    staticBoxes.forEach(bbox => {
+      if (!rectsOverlap(dbox, bbox)) return;
+      const shiftPx = shiftToClear(bbox);
       if (Math.abs(shiftPx) > Math.abs(maxShiftPx)) maxShiftPx = shiftPx;
+    });
+    // A shift purely to clear another dynamic is only trusted after checking
+    // it doesn't land the moved box on a beam/stem/dir that was clear before
+    // -- fixing a dynam-vs-dynam overlap isn't worth creating a new,
+    // previously-absent collision with something else.
+    dynamOverlaps.forEach(bbox => {
+      if (!rectsOverlap(dbox, bbox)) return;
+      const shiftPx = shiftToClear(bbox);
+      if (Math.abs(shiftPx) <= Math.abs(maxShiftPx)) return;
+      const shifted = { x: dbox.x, y: dbox.y + shiftPx, width: dbox.width, height: dbox.height };
+      const createsNewCollision = staticBoxes.some(s => rectsOverlap(shifted, s) && !rectsOverlap(dbox, s));
+      if (!createsNewCollision) maxShiftPx = shiftPx;
     });
     if (maxShiftPx !== 0) {
       const wrapper = document.createElementNS(SVGNS, 'g');
