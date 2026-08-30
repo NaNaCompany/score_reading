@@ -1301,85 +1301,32 @@ function buildPlaybackData() {
   return { timemap, noteInfo, totalQ, baseTempo };
 }
 
-// Shared bus all voices route through instead of ctx.destination directly.
-// A DynamicsCompressorNode was tried here to let per-note peaks run hotter
-// without dense chords clipping, but a compressor applies no automatic
-// makeup gain in Web Audio -- for the mostly-single-note passages here
-// (rarely hitting its threshold) that made the *average* case quieter than
-// no compressor at all, which is almost certainly why playback went from
-// "audible but ugly" to "silent" on a real phone speaker. Plain gain is far
-// more predictable: a little clipping on the densest chords is a much safer
-// failure mode than losing audibility entirely.
-// Confirmed live (via a user's console trace): if audioCtx is ever replaced
-// with a new AudioContext (closed and recreated -- which real browsers can
-// force after a device change or long background/suspend), a masterBus left
-// over from the OLD context makes every note's connect() throw
-// "cannot connect to an AudioNode belonging to a different audio context",
-// silently aborting scheduleFrom's loop with zero notes scheduled. Tracking
-// which ctx it belongs to and rebuilding on mismatch avoids that.
-let masterBus = null;
-let masterBusCtx = null;
-function getMasterBus(ctx) {
-  if (!masterBus || masterBusCtx !== ctx) {
-    masterBus = ctx.createGain();
-    masterBus.gain.value = 1;
-    masterBus.connect(ctx.destination);
-    masterBusCtx = ctx;
-  }
-  return masterBus;
-}
-
-// Triangle-wave fundamental plus two quieter triangle overtones, all
-// SUSTAINED at their peak level for most of the note's duration (only a
-// short release at the end) -- same envelope shape as the original
-// single-oscillator version that was confirmed audible on a real device,
-// just layered across a few oscillators for a slightly fuller tone. An
-// exponential-decay-from-attack envelope was tried here (meant to sound
-// more like a struck string) and reported as completely inaudible on real
-// hardware twice in a row despite scheduling correctly and passing every
-// state check available to this environment -- sustaining at peak keeps far
-// more total acoustic energy in each note, which is the reliable, provable
-// property to optimize for over tonal shaping this session can't actually
-// listen to and verify.
+// Reverted to the exact original single-triangle-oscillator voice, straight
+// to ctx.destination -- every attempted enhancement this session (a
+// multi-harmonic additive synth, a shared gain/compressor bus) was reported
+// as producing no audible sound at all on a real device despite passing
+// every check available in this environment (state, timer, analyser signal
+// on the graph), while this exact version was confirmed audible from the
+// very first playback test. Not touching this again without being able to
+// actually listen to it.
 function scheduleVoice(ctx, startTime, duration, freq) {
-  const master = ctx.createGain();
-  master.gain.value = 1;
-  master.connect(getMasterBus(ctx));
-  const attack = 0.006;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.value = freq;
+  const attack = 0.008;
   const release = Math.min(0.09, duration * 0.35);
+  const peak = 0.16;
   const stopAt = startTime + duration;
-  const partials = [
-    { mult: 1, peak: 0.20 },
-    { mult: 2, peak: 0.10 },
-    { mult: 3, peak: 0.05 },
-  ];
-  const oscs = partials.map(p => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.value = freq * p.mult;
-    gain.gain.setValueAtTime(0, startTime);
-    gain.gain.linearRampToValueAtTime(p.peak, startTime + attack);
-    gain.gain.setValueAtTime(p.peak, Math.max(startTime + attack, stopAt - release));
-    gain.gain.linearRampToValueAtTime(0, stopAt);
-    osc.connect(gain);
-    gain.connect(master);
-    osc.start(startTime);
-    osc.stop(stopAt + 0.02);
-    return osc;
-  });
-  return {
-    // Lets clearScheduledVoices() (pause/stop) cut this voice off immediately
-    // instead of waiting out its natural release tail.
-    stop() {
-      const now = ctx.currentTime;
-      try {
-        master.gain.setValueAtTime(1, now);
-        master.gain.linearRampToValueAtTime(0, now + 0.03);
-      } catch (e) {}
-      oscs.forEach(o => { try { o.stop(now + 0.04); } catch (e) {} });
-    },
-  };
+  gain.gain.setValueAtTime(0, startTime);
+  gain.gain.linearRampToValueAtTime(peak, startTime + attack);
+  gain.gain.setValueAtTime(peak, Math.max(startTime + attack, stopAt - release));
+  gain.gain.linearRampToValueAtTime(0, stopAt);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(startTime);
+  osc.stop(stopAt + 0.02);
+  return osc;
 }
 
 function scheduleFrom(qStart) {
@@ -1712,6 +1659,16 @@ async function handleFile(file) {
     try {
       playbackData = buildPlaybackData();
       document.getElementById('bpmInput').value = Math.round(playbackData.baseTempo);
+    } catch (e) { console.error(e); }
+    // Create (but don't resume) the AudioContext as soon as a score is
+    // loaded, well before the user ever presses play -- it stays suspended
+    // until a real click resumes it (autoplay policy still applies), but
+    // this gives the context however long the user takes to look at the
+    // score before pressing play to fully attach to the audio device,
+    // rather than doing that attachment for the very first time under
+    // time pressure inside the click handler itself.
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     } catch (e) { console.error(e); }
   } catch (err) {
     console.error(err);
