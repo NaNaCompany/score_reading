@@ -298,6 +298,27 @@
   }
   .pane-body .inner { min-width: 320px; }
 
+  /* Pagination is on for every viewport now (was desktop-only): one page at
+     a time, scaled down to fit inside the box (never past its edges) rather
+     than the old mobile mode of one giant continuously-scrolling page that
+     needed both vertical and horizontal scrolling to read. */
+  .pane-body.paged {
+    height: 75vh;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pane-body.paged .inner {
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pane-body.paged svg { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
+
   /* On mobile there's no side-by-side room worth spending on the
      before/after comparison -- only the colored score matters there, so the
      original pane is dropped and the colored one gets the full-width room. */
@@ -306,7 +327,7 @@
   }
 
   .pager {
-    display: none;
+    display: flex;
     align-items: center;
     justify-content: center;
     gap: 16px;
@@ -325,7 +346,7 @@
   .pager span { font-size: 13px; color: var(--sub); min-width: 60px; text-align: center; }
 
   .density-control {
-    display: none;
+    display: flex;
     align-items: center;
     justify-content: center;
     gap: 10px;
@@ -375,14 +396,9 @@
     .previews { flex-direction: row; gap: 20px; }
     .pane-body.paged {
       height: auto;
-      overflow: hidden;
-      display: flex;
       align-items: flex-start;
-      justify-content: center;
     }
-    .pane-body.paged .inner { min-width: 0; width: 100%; }
-    .pane-body.paged svg { width: 100% !important; height: auto !important; display: block; }
-    .pager { display: flex; }
+    .pane-body.paged svg { max-width: none; max-height: none; width: 100% !important; height: auto !important; }
   }
 
   .stats {
@@ -1141,19 +1157,36 @@ async function ensureRenderers() {
   linkPaneScroll();
 }
 
+// Both modes paginate now (mobile used to render the whole piece as one
+// giant continuously-scrolling page, needing scroll in both directions to
+// read anything). Mobile's pageWidth is derived from the actual on-screen
+// pane width (Verovio's page units are 1/10 mm, so CSS px is converted at
+// the standard 96px/inch) rather than a guessed constant -- that lays the
+// page out to genuinely fit the device instead of relying on the CSS
+// "contain" fit in .pane-body.paged to shrink a mismatched size down, which
+// left phones with either blank bars or a page that scaled oddly.
+const MM_PER_CSS_PX = 25.4 / 96;
+function mobilePaneWidthPx() {
+  const paneBody = document.getElementById('paneRightInner') &&
+    document.getElementById('paneRightInner').closest('.pane-body');
+  const w = paneBody ? paneBody.clientWidth - 12 /* 6px padding each side */ : 0;
+  return w > 0 ? w : window.innerWidth;
+}
 function verovioOptions(desktop) {
-  return desktop
-    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 }
-    : { pageWidth: 1500, pageHeight: 60000, scale: 32, breaks: 'auto', adjustPageHeight: true, footer: 'none' };
+  if (desktop) {
+    return { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
+  }
+  const pageWidth = Math.round(mobilePaneWidthPx() * MM_PER_CSS_PX * 10);
+  const pageHeight = Math.round(pageWidth / 0.5); // keep roughly a phone's own portrait aspect ratio
+  return { pageWidth, pageHeight, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
 }
 
 const pagerState = { current: 0, total: 1 };
 
 function renderCurrentPage() {
-  const desktop = isDesktopView();
   const leftEl = document.getElementById('paneLeftInner');
   const rightEl = document.getElementById('paneRightInner');
-  const n = desktop ? pagerState.current + 1 : 1;
+  const n = pagerState.current + 1;
   leftEl.innerHTML = vrvLeft.renderToSVG(n);
   rightEl.innerHTML = vrvRight.renderToSVG(n);
   const previewTitle = getTitleInfo().title;
@@ -1188,7 +1221,7 @@ const measuresSlider = document.getElementById('measuresSlider');
 measuresSlider.addEventListener('input', async () => {
   desktopScale = parseInt(measuresSlider.value, 10);
   document.getElementById('measuresValue').textContent = desktopScale;
-  if (!rawXmlText || !isDesktopView()) return;
+  if (!rawXmlText) return;
   pagerState.current = 0;
   await renderLeft();
   await renderRight();
@@ -1258,24 +1291,45 @@ function buildPlaybackData() {
   return { timemap, noteInfo, totalQ, baseTempo };
 }
 
+// Shared compressor all voices route through instead of ctx.destination
+// directly -- lets each note's peak be turned up for real audibility on
+// phone speakers without dense chords (many notes summed at once) clipping
+// into harsh distortion.
+let masterBus = null;
+function getMasterBus(ctx) {
+  if (!masterBus) {
+    masterBus = ctx.createDynamicsCompressor();
+    masterBus.threshold.value = -12;
+    masterBus.knee.value = 24;
+    masterBus.ratio.value = 6;
+    masterBus.attack.value = 0.003;
+    masterBus.release.value = 0.15;
+    masterBus.connect(ctx.destination);
+  }
+  return masterBus;
+}
+
 // Additive synth voice: a sine fundamental plus three quieter, faster-decaying
 // overtones, each with its own exponential decay -- a single flat-sustained
 // triangle wave (the previous approach) is what reads as a buzzy "8-bit"
 // tone; layering harmonics that decay at different rates and fade out
 // exponentially (like a struck string) rather than sustaining at a fixed
-// level reads much closer to a plucked/struck instrument. Peaks are kept
-// close to the old single-voice peak (0.16 total) so dense chords summed on
-// one ctx.destination don't clip.
+// level reads much closer to a plucked/struck instrument. Levels are pushed
+// well above the old single-voice peak (0.16) -- a pure sine-heavy tone at
+// that level turned out to be nearly inaudible on small phone speakers,
+// which reproduce the (louder, closer-mic'd) 2nd/3rd harmonics far better
+// than a quiet fundamental -- and the shared compressor bus above keeps
+// that from clipping when a chord stacks many of these at once.
 function scheduleVoice(ctx, startTime, duration, freq) {
   const master = ctx.createGain();
   master.gain.value = 1;
-  master.connect(ctx.destination);
+  master.connect(getMasterBus(ctx));
   const attack = 0.004;
   const partials = [
-    { mult: 1, peak: 0.09, decayFactor: 1 },
-    { mult: 2, peak: 0.045, decayFactor: 0.6 },
-    { mult: 3, peak: 0.02, decayFactor: 0.35 },
-    { mult: 4, peak: 0.01, decayFactor: 0.22 },
+    { mult: 1, peak: 0.28, decayFactor: 1 },
+    { mult: 2, peak: 0.20, decayFactor: 0.6 },
+    { mult: 3, peak: 0.11, decayFactor: 0.35 },
+    { mult: 4, peak: 0.06, decayFactor: 0.22 },
   ];
   const oscs = partials.map(p => {
     const osc = ctx.createOscillator();
@@ -1323,8 +1377,9 @@ function clearScheduledVoices() {
   scheduledVoices = [];
 }
 
-// Scrolls/pages the notation to follow qCurrent: flips desktop pages via the
-// existing pager, or scrolls the mobile continuous view to the active note.
+// Flips the pager to whichever page holds the currently-playing note (both
+// mobile and desktop paginate now, so this is the only following needed --
+// there's no more single giant scrollable page to scroll within).
 function followPlayback(qCurrent) {
   const tm = playbackData.timemap;
   let activeIds = null;
@@ -1336,19 +1391,11 @@ function followPlayback(qCurrent) {
   if (id === lastScrolledId) return;
   lastScrolledId = id;
 
-  if (isDesktopView()) {
-    const page = vrvRight.getPageWithElement(id);
-    if (page && page !== lastPageShown) {
-      lastPageShown = page;
-      pagerState.current = page - 1;
-      renderCurrentPage();
-    }
-  } else {
-    const el = document.getElementById(id);
-    // 'auto' (immediate), not 'smooth': this fires every ~100ms while playing,
-    // and overlapping smooth-scroll animations from consecutive calls would
-    // fight each other and stutter rather than track the music cleanly.
-    if (el) el.scrollIntoView({ behavior: 'auto', block: 'center' });
+  const page = vrvRight.getPageWithElement(id);
+  if (page && page !== lastPageShown) {
+    lastPageShown = page;
+    pagerState.current = page - 1;
+    renderCurrentPage();
   }
 }
 
@@ -1377,7 +1424,7 @@ async function startPlayback() {
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   isPlaying = true;
   lastScrolledId = null;
-  lastPageShown = isDesktopView() ? pagerState.current + 1 : null;
+  lastPageShown = pagerState.current + 1;
   scheduleFrom(playbackCurrentQ);
   document.getElementById('playPauseBtn').textContent = '⏸ 일시정지';
   document.getElementById('stopBtn').disabled = false;
@@ -1446,10 +1493,8 @@ function updateStatsUI(stats) {
 }
 
 function updateModeUI() {
-  const desktop = isDesktopView();
-  document.getElementById('densityControl').style.display = desktop ? 'flex' : 'none';
-  document.querySelector('#paneLeftInner').closest('.pane-body').classList.toggle('paged', desktop);
-  document.querySelector('#paneRightInner').closest('.pane-body').classList.toggle('paged', desktop);
+  document.querySelector('#paneLeftInner').closest('.pane-body').classList.add('paged');
+  document.querySelector('#paneRightInner').closest('.pane-body').classList.add('paged');
 }
 
 function getTitleInfo() {
