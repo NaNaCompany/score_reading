@@ -1447,15 +1447,18 @@ async function startPlayback() {
   // set to true, so the play button appeared to do nothing at all and the
   // time display never moved, with no visible error anywhere.
   try {
-    if (!playbackData) playbackData = buildPlaybackData();
+    // Create + resume the AudioContext FIRST, before any other work -- some
+    // browsers only treat AudioContext creation as tied to the user gesture
+    // that triggered this handler if it happens essentially immediately;
+    // buildPlaybackData() below does real synchronous work (Verovio timemap
+    // + per-note MIDI lookups across the whole piece) that could easily eat
+    // several hundred ms, possibly long enough for the gesture to no longer
+    // count by the time the context was created, leaving it reporting
+    // "running" without ever truly attaching to the audio device.
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    // Always resume, even when .state already reads "running" -- a
-    // confirmed-working manual test called resume() unconditionally, while
-    // this only called it when suspended; some browsers report "running"
-    // immediately on a freshly created context without ever actually
-    // attaching it to the audio hardware until resume() is called explicitly.
     await audioCtx.resume();
     if (audioCtx.state !== 'running') throw new Error(`오디오 컨텍스트가 시작되지 않았습니다 (state: ${audioCtx.state})`);
+    if (!playbackData) playbackData = buildPlaybackData();
     isPlaying = true;
     lastScrolledId = null;
     lastPageShown = pagerState.current + 1;
