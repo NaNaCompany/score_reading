@@ -1294,12 +1294,21 @@ function buildPlaybackData() {
 // "audible but ugly" to "silent" on a real phone speaker. Plain gain is far
 // more predictable: a little clipping on the densest chords is a much safer
 // failure mode than losing audibility entirely.
+// Confirmed live (via a user's console trace): if audioCtx is ever replaced
+// with a new AudioContext (closed and recreated -- which real browsers can
+// force after a device change or long background/suspend), a masterBus left
+// over from the OLD context makes every note's connect() throw
+// "cannot connect to an AudioNode belonging to a different audio context",
+// silently aborting scheduleFrom's loop with zero notes scheduled. Tracking
+// which ctx it belongs to and rebuilding on mismatch avoids that.
 let masterBus = null;
+let masterBusCtx = null;
 function getMasterBus(ctx) {
-  if (!masterBus) {
+  if (!masterBus || masterBusCtx !== ctx) {
     masterBus = ctx.createGain();
     masterBus.gain.value = 1;
     masterBus.connect(ctx.destination);
+    masterBusCtx = ctx;
   }
   return masterBus;
 }
@@ -1402,7 +1411,7 @@ function updatePlaybackTimeUI(qCurrent, totalQ, bpm) {
 }
 
 function playbackTick() {
-  if (!isPlaying) return;
+  if (!isPlaying || !audioCtx) return;
   const bpm = currentBpm();
   const elapsedSec = audioCtx.currentTime - playbackStartAudioTime;
   const q = Math.max(0, playbackStartQ + elapsedSec * (bpm / 60));
