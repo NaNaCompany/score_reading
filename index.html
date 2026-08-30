@@ -1413,17 +1413,29 @@ function playbackTick() {
 
 async function startPlayback() {
   if (!rawXmlText || !vrvRight) return;
-  if (!playbackData) playbackData = buildPlaybackData();
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
-  isPlaying = true;
-  lastScrolledId = null;
-  lastPageShown = pagerState.current + 1;
-  scheduleFrom(playbackCurrentQ);
-  document.getElementById('playPauseBtn').textContent = '⏸ 일시정지';
-  document.getElementById('stopBtn').disabled = false;
-  playbackTick();
-  playbackIntervalId = setInterval(playbackTick, 100);
+  // Nothing here previously caught a failure (a rejected/blocked
+  // AudioContext.resume() being the likely real-world case, e.g. a
+  // restrictive in-app browser's autoplay policy) -- isPlaying never got
+  // set to true, so the play button appeared to do nothing at all and the
+  // time display never moved, with no visible error anywhere.
+  try {
+    if (!playbackData) playbackData = buildPlaybackData();
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    if (audioCtx.state !== 'running') throw new Error(`오디오 컨텍스트가 시작되지 않았습니다 (state: ${audioCtx.state})`);
+    isPlaying = true;
+    lastScrolledId = null;
+    lastPageShown = pagerState.current + 1;
+    scheduleFrom(playbackCurrentQ);
+    document.getElementById('playPauseBtn').textContent = '⏸ 일시정지';
+    document.getElementById('stopBtn').disabled = false;
+    playbackTick();
+    playbackIntervalId = setInterval(playbackTick, 100);
+  } catch (err) {
+    console.error(err);
+    isPlaying = false;
+    setGlobalError('재생을 시작할 수 없습니다: ' + err.message + ' (다른 브라우저나 인앱 브라우저가 아닌 일반 브라우저에서 시도해보세요)');
+  }
 }
 
 function pausePlayback() {
