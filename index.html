@@ -292,11 +292,18 @@
   }
   .pane-body {
     background: #ffffff;
-    height: 380px;
+    height: 75vh;
     overflow: auto;
     padding: 6px;
   }
   .pane-body .inner { min-width: 320px; }
+
+  /* On mobile there's no side-by-side room worth spending on the
+     before/after comparison -- only the colored score matters there, so the
+     original pane is dropped and the colored one gets the full-width room. */
+  @media (max-width: 899.98px) {
+    .pane.pane-original { display: none; }
+  }
 
   .pager {
     display: none;
@@ -572,7 +579,7 @@
 
   <div id="workspace">
     <div class="previews">
-      <div class="pane">
+      <div class="pane pane-original">
         <div class="pane-head"><span>원본</span><span class="badge" id="statusLeft"></span></div>
         <div class="pane-body"><div class="inner" id="paneLeftInner"></div></div>
       </div>
@@ -596,7 +603,7 @@
     <div class="playback-control" id="playbackControl">
       <button id="playPauseBtn" type="button">▶ 재생</button>
       <button id="stopBtn" type="button" class="secondary" disabled>■ 정지</button>
-      <label for="bpmInput">BPM <input type="number" id="bpmInput" min="20" max="300" value="120"></label>
+      <label for="bpmInput">BPM <input type="number" id="bpmInput" min="20" max="300" value="140"></label>
       <span id="playbackTime">0:00 / 0:00</span>
     </div>
 
@@ -1213,7 +1220,7 @@ let lastPageShown = null;
 
 function currentBpm() {
   const v = parseInt(document.getElementById('bpmInput').value, 10);
-  return (v > 0 && v < 1000) ? v : 120;
+  return (v > 0 && v < 1000) ? v : 140;
 }
 function qToSeconds(q, bpm) { return q * (60 / bpm); }
 function midiToFreq(pitch) { return 440 * Math.pow(2, (pitch - 69) / 12); }
@@ -1228,7 +1235,7 @@ function buildPlaybackData() {
   const timemap = vrvRight.renderToTimemap();
   const noteInfo = new Map();
   let totalQ = 0;
-  let baseTempo = 120;
+  let baseTempo = 140;
   timemap.forEach(entry => {
     if (entry.tempo) baseTempo = entry.tempo;
     if (entry.on) {
@@ -1251,27 +1258,52 @@ function buildPlaybackData() {
   return { timemap, noteInfo, totalQ, baseTempo };
 }
 
-// Simple triangle-wave voice with a fast attack/release envelope -- plain
-// and a bit electronic-sounding by design (no soundfont to embed), but
-// clear enough to follow pitch/rhythm while sight-reading.
+// Additive synth voice: a sine fundamental plus three quieter, faster-decaying
+// overtones, each with its own exponential decay -- a single flat-sustained
+// triangle wave (the previous approach) is what reads as a buzzy "8-bit"
+// tone; layering harmonics that decay at different rates and fade out
+// exponentially (like a struck string) rather than sustaining at a fixed
+// level reads much closer to a plucked/struck instrument. Peaks are kept
+// close to the old single-voice peak (0.16 total) so dense chords summed on
+// one ctx.destination don't clip.
 function scheduleVoice(ctx, startTime, duration, freq) {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = 'triangle';
-  osc.frequency.value = freq;
-  const attack = 0.008;
-  const release = Math.min(0.09, duration * 0.35);
-  const peak = 0.16;
-  const stopAt = startTime + duration;
-  gain.gain.setValueAtTime(0, startTime);
-  gain.gain.linearRampToValueAtTime(peak, startTime + attack);
-  gain.gain.setValueAtTime(peak, Math.max(startTime + attack, stopAt - release));
-  gain.gain.linearRampToValueAtTime(0, stopAt);
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.start(startTime);
-  osc.stop(stopAt + 0.02);
-  return osc;
+  const master = ctx.createGain();
+  master.gain.value = 1;
+  master.connect(ctx.destination);
+  const attack = 0.004;
+  const partials = [
+    { mult: 1, peak: 0.09, decayFactor: 1 },
+    { mult: 2, peak: 0.045, decayFactor: 0.6 },
+    { mult: 3, peak: 0.02, decayFactor: 0.35 },
+    { mult: 4, peak: 0.01, decayFactor: 0.22 },
+  ];
+  const oscs = partials.map(p => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const decay = Math.max(0.03, duration * p.decayFactor);
+    osc.type = 'sine';
+    osc.frequency.value = freq * p.mult;
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.linearRampToValueAtTime(p.peak, startTime + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + attack + decay);
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(startTime);
+    osc.stop(startTime + attack + decay + 0.05);
+    return osc;
+  });
+  return {
+    // Lets clearScheduledVoices() (pause/stop) cut this voice off immediately
+    // instead of waiting out its natural decay tail.
+    stop() {
+      const now = ctx.currentTime;
+      try {
+        master.gain.setValueAtTime(1, now);
+        master.gain.linearRampToValueAtTime(0, now + 0.03);
+      } catch (e) {}
+      oscs.forEach(o => { try { o.stop(now + 0.04); } catch (e) {} });
+    },
+  };
 }
 
 function scheduleFrom(qStart) {
