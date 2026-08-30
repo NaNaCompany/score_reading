@@ -1304,45 +1304,48 @@ function getMasterBus(ctx) {
   return masterBus;
 }
 
-// Additive synth voice: a sine fundamental plus three quieter, faster-decaying
-// overtones, each with its own exponential decay -- a single flat-sustained
-// triangle wave (the previous approach) is what reads as a buzzy "8-bit"
-// tone; layering harmonics that decay at different rates and fade out
-// exponentially (like a struck string) rather than sustaining at a fixed
-// level reads much closer to a plucked/struck instrument. Levels are well
-// above the original single-voice peak (0.16) so single notes (most of a
-// passage) are clearly audible on a phone speaker; the densest chords may
-// clip a little, which is preferable to the whole thing being too quiet to
-// hear.
+// Triangle-wave fundamental plus two quieter triangle overtones, all
+// SUSTAINED at their peak level for most of the note's duration (only a
+// short release at the end) -- same envelope shape as the original
+// single-oscillator version that was confirmed audible on a real device,
+// just layered across a few oscillators for a slightly fuller tone. An
+// exponential-decay-from-attack envelope was tried here (meant to sound
+// more like a struck string) and reported as completely inaudible on real
+// hardware twice in a row despite scheduling correctly and passing every
+// state check available to this environment -- sustaining at peak keeps far
+// more total acoustic energy in each note, which is the reliable, provable
+// property to optimize for over tonal shaping this session can't actually
+// listen to and verify.
 function scheduleVoice(ctx, startTime, duration, freq) {
   const master = ctx.createGain();
   master.gain.value = 1;
   master.connect(getMasterBus(ctx));
-  const attack = 0.004;
+  const attack = 0.006;
+  const release = Math.min(0.09, duration * 0.35);
+  const stopAt = startTime + duration;
   const partials = [
-    { mult: 1, peak: 0.20, decayFactor: 1 },
-    { mult: 2, peak: 0.12, decayFactor: 0.6 },
-    { mult: 3, peak: 0.06, decayFactor: 0.35 },
-    { mult: 4, peak: 0.03, decayFactor: 0.22 },
+    { mult: 1, peak: 0.20 },
+    { mult: 2, peak: 0.10 },
+    { mult: 3, peak: 0.05 },
   ];
   const oscs = partials.map(p => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    const decay = Math.max(0.03, duration * p.decayFactor);
-    osc.type = 'sine';
+    osc.type = 'triangle';
     osc.frequency.value = freq * p.mult;
-    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.setValueAtTime(0, startTime);
     gain.gain.linearRampToValueAtTime(p.peak, startTime + attack);
-    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + attack + decay);
+    gain.gain.setValueAtTime(p.peak, Math.max(startTime + attack, stopAt - release));
+    gain.gain.linearRampToValueAtTime(0, stopAt);
     osc.connect(gain);
     gain.connect(master);
     osc.start(startTime);
-    osc.stop(startTime + attack + decay + 0.05);
+    osc.stop(stopAt + 0.02);
     return osc;
   });
   return {
     // Lets clearScheduledVoices() (pause/stop) cut this voice off immediately
-    // instead of waiting out its natural decay tail.
+    // instead of waiting out its natural release tail.
     stop() {
       const now = ctx.currentTime;
       try {
