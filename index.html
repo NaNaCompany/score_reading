@@ -1159,26 +1159,20 @@ async function ensureRenderers() {
 
 // Both modes paginate now (mobile used to render the whole piece as one
 // giant continuously-scrolling page, needing scroll in both directions to
-// read anything). Mobile's pageWidth is derived from the actual on-screen
-// pane width (Verovio's page units are 1/10 mm, so CSS px is converted at
-// the standard 96px/inch) rather than a guessed constant -- that lays the
-// page out to genuinely fit the device instead of relying on the CSS
-// "contain" fit in .pane-body.paged to shrink a mismatched size down, which
-// left phones with either blank bars or a page that scaled oddly.
-const MM_PER_CSS_PX = 25.4 / 96;
-function mobilePaneWidthPx() {
-  const paneBody = document.getElementById('paneRightInner') &&
-    document.getElementById('paneRightInner').closest('.pane-body');
-  const w = paneBody ? paneBody.clientWidth - 12 /* 6px padding each side */ : 0;
-  return w > 0 ? w : window.innerWidth;
-}
+// read anything). Verovio's `scale` turns out (confirmed empirically: same
+// measures-per-system and page count at scale 10 through 65 for the same
+// pageWidth) to be a pure final zoom that doesn't affect layout density at
+// all -- only pageWidth/pageHeight decide how many measures fit per line and
+// how many systems fit per page. So mobile uses its own fixed virtual page,
+// picked to keep a readable number of measures per line (~5-6, rather than
+// the ~2 a device-width-sized page produced) instead of trying to match the
+// device's actual pixel width; the CSS "contain" fit in .pane-body.paged
+// then shrinks this down to whatever the real screen size is, same as
+// desktop's page already relies on CSS to fit its container.
 function verovioOptions(desktop) {
-  if (desktop) {
-    return { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
-  }
-  const pageWidth = Math.round(mobilePaneWidthPx() * MM_PER_CSS_PX * 10);
-  const pageHeight = Math.round(pageWidth / 0.5); // keep roughly a phone's own portrait aspect ratio
-  return { pageWidth, pageHeight, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
+  return desktop
+    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 }
+    : { pageWidth: 1600, pageHeight: 2909, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
 }
 
 const pagerState = { current: 0, total: 1 };
@@ -1291,19 +1285,20 @@ function buildPlaybackData() {
   return { timemap, noteInfo, totalQ, baseTempo };
 }
 
-// Shared compressor all voices route through instead of ctx.destination
-// directly -- lets each note's peak be turned up for real audibility on
-// phone speakers without dense chords (many notes summed at once) clipping
-// into harsh distortion.
+// Shared bus all voices route through instead of ctx.destination directly.
+// A DynamicsCompressorNode was tried here to let per-note peaks run hotter
+// without dense chords clipping, but a compressor applies no automatic
+// makeup gain in Web Audio -- for the mostly-single-note passages here
+// (rarely hitting its threshold) that made the *average* case quieter than
+// no compressor at all, which is almost certainly why playback went from
+// "audible but ugly" to "silent" on a real phone speaker. Plain gain is far
+// more predictable: a little clipping on the densest chords is a much safer
+// failure mode than losing audibility entirely.
 let masterBus = null;
 function getMasterBus(ctx) {
   if (!masterBus) {
-    masterBus = ctx.createDynamicsCompressor();
-    masterBus.threshold.value = -12;
-    masterBus.knee.value = 24;
-    masterBus.ratio.value = 6;
-    masterBus.attack.value = 0.003;
-    masterBus.release.value = 0.15;
+    masterBus = ctx.createGain();
+    masterBus.gain.value = 1;
     masterBus.connect(ctx.destination);
   }
   return masterBus;
@@ -1314,22 +1309,21 @@ function getMasterBus(ctx) {
 // triangle wave (the previous approach) is what reads as a buzzy "8-bit"
 // tone; layering harmonics that decay at different rates and fade out
 // exponentially (like a struck string) rather than sustaining at a fixed
-// level reads much closer to a plucked/struck instrument. Levels are pushed
-// well above the old single-voice peak (0.16) -- a pure sine-heavy tone at
-// that level turned out to be nearly inaudible on small phone speakers,
-// which reproduce the (louder, closer-mic'd) 2nd/3rd harmonics far better
-// than a quiet fundamental -- and the shared compressor bus above keeps
-// that from clipping when a chord stacks many of these at once.
+// level reads much closer to a plucked/struck instrument. Levels are well
+// above the original single-voice peak (0.16) so single notes (most of a
+// passage) are clearly audible on a phone speaker; the densest chords may
+// clip a little, which is preferable to the whole thing being too quiet to
+// hear.
 function scheduleVoice(ctx, startTime, duration, freq) {
   const master = ctx.createGain();
   master.gain.value = 1;
   master.connect(getMasterBus(ctx));
   const attack = 0.004;
   const partials = [
-    { mult: 1, peak: 0.28, decayFactor: 1 },
-    { mult: 2, peak: 0.20, decayFactor: 0.6 },
-    { mult: 3, peak: 0.11, decayFactor: 0.35 },
-    { mult: 4, peak: 0.06, decayFactor: 0.22 },
+    { mult: 1, peak: 0.20, decayFactor: 1 },
+    { mult: 2, peak: 0.12, decayFactor: 0.6 },
+    { mult: 3, peak: 0.06, decayFactor: 0.35 },
+    { mult: 4, peak: 0.03, decayFactor: 0.22 },
   ];
   const oscs = partials.map(p => {
     const osc = ctx.createOscillator();
@@ -1492,9 +1486,18 @@ function updateStatsUI(stats) {
   document.getElementById('statWhite').textContent = stats.white;
 }
 
+// Remembers the viewport shape as of the last render, so a later resize (a
+// crossing the desktop/mobile breakpoint) can tell whether the score needs
+// to be laid out again -- see handleViewportResize below. Mobile's own page
+// size is now a fixed constant (see verovioOptions), not device-width-based,
+// so a foldable unfolding or rotating *within* mobile width doesn't need a
+// re-render: the existing CSS "contain" fit already reflows that live.
+let lastRenderWasDesktop = null;
+
 function updateModeUI() {
   document.querySelector('#paneLeftInner').closest('.pane-body').classList.add('paged');
   document.querySelector('#paneRightInner').closest('.pane-body').classList.add('paged');
+  lastRenderWasDesktop = isDesktopView();
 }
 
 function getTitleInfo() {
@@ -1547,6 +1550,23 @@ function scheduleRenderRight() {
   statusRight.textContent = '업데이트 중...';
   debounceTimer = setTimeout(() => { renderRight(); }, 200);
 }
+
+// Re-renders only when the window actually crosses the desktop/mobile
+// breakpoint (e.g. a foldable phone unfolding past 900px, or a browser
+// window being resized across it) -- that's the only width change that
+// changes Verovio's page options now.
+let viewportResizeTimer = null;
+function handleViewportResize() {
+  if (!rawXmlText || !vrvLeft || !vrvRight) return;
+  if (isDesktopView() === lastRenderWasDesktop) return;
+  pagerState.current = 0;
+  renderLeft();
+  renderRight();
+}
+window.addEventListener('resize', () => {
+  clearTimeout(viewportResizeTimer);
+  viewportResizeTimer = setTimeout(handleViewportResize, 200);
+});
 
 function bindRow(key, toggleId, colorId, onChange) {
   const toggle = document.getElementById(toggleId);
