@@ -14,6 +14,7 @@
 <script src="https://www.verovio.org/javascript/latest/verovio-toolkit-wasm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.4/dist/svg2pdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.js"></script>
 <style>
   :root {
     --bg: #fbf3ea;
@@ -1238,10 +1239,8 @@ measuresSlider.addEventListener('input', async () => {
 });
 
 /* ===================== Playback ===================== */
-// Plays the currently colored/edited score back with a plain Web Audio
-// synth (no external soundfont -- keeps the app a single self-contained
-// file that works over file://) and auto-follows the playing note: turning
-// pages in desktop mode, scrolling the pane in mobile's continuous view.
+// Plays the currently colored/edited score back with a Tone.js PolySynth
+// and auto-follows the playing note by turning to whichever page it's on.
 //
 // Verovio's own renderToTimemap()/getMIDIValuesForElement() do all the
 // timing/pitch work and use the exact same element IDs as the rendered SVG,
@@ -1252,7 +1251,8 @@ measuresSlider.addEventListener('input', async () => {
 
 let audioCtx = null;
 let playbackData = null;       // { timemap, noteInfo: Map<id,{onQ,offQ,pitch}>, totalQ }
-let scheduledVoices = [];      // oscillators currently scheduled, for stop()
+let polySynth = null;          // Tone.js PolySynth, created lazily against audioCtx
+let scheduledNoteIds = null;   // Set<id> already handed to Tone this playback run
 let playbackStartAudioTime = 0;
 let playbackStartQ = 0;
 let playbackCurrentQ = 0;
@@ -1260,6 +1260,18 @@ let isPlaying = false;
 let playbackIntervalId = null;
 let lastScrolledId = null;
 let lastPageShown = null;
+
+// Single place that creates audioCtx -- always immediately points Tone.js
+// at this exact context (rather than letting Tone create its own) so every
+// consumer of audio (Tone's PolySynth) shares the one context this app
+// controls the lifecycle and resume() timing of.
+function ensureAudioContext() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    Tone.setContext(audioCtx);
+  }
+  return audioCtx;
+}
 
 function currentBpm() {
   const v = parseInt(document.getElementById('bpmInput').value, 10);
@@ -1301,49 +1313,55 @@ function buildPlaybackData() {
   return { timemap, noteInfo, totalQ, baseTempo };
 }
 
-// Reverted to the exact original single-triangle-oscillator voice, straight
-// to ctx.destination -- every attempted enhancement this session (a
-// multi-harmonic additive synth, a shared gain/compressor bus) was reported
-// as producing no audible sound at all on a real device despite passing
-// every check available in this environment (state, timer, analyser signal
-// on the graph), while this exact version was confirmed audible from the
-// very first playback test. Not touching this again without being able to
-// actually listen to it.
-function scheduleVoice(ctx, startTime, duration, freq) {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = 'triangle';
-  osc.frequency.value = freq;
-  const attack = 0.008;
-  const release = Math.min(0.09, duration * 0.35);
-  const peak = 0.16;
-  const stopAt = startTime + duration;
-  gain.gain.setValueAtTime(0, startTime);
-  gain.gain.linearRampToValueAtTime(peak, startTime + attack);
-  gain.gain.setValueAtTime(peak, Math.max(startTime + attack, stopAt - release));
-  gain.gain.linearRampToValueAtTime(0, stopAt);
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.start(startTime);
-  osc.stop(stopAt + 0.02);
-  return osc;
+// Tone.js PolySynth, wired to reuse the SAME AudioContext created in
+// ensureAudioContext() rather than one of its own -- letting Tone create and
+// manage its own separate context risked hitting the exact "reports running
+// but never actually reaches the speakers" issue this session spent hours
+// chasing with a hand-rolled oscillator, which only ever turned out to be
+// reliably audible on this specific, carefully-warmed context.
+function ensurePolySynth() {
+  if (!polySynth) {
+    polySynth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'triangle' },
+      envelope: { attack: 0.008, decay: 0.08, sustain: 0.35, release: 0.15 },
+    }).toDestination();
+  }
+  return polySynth;
 }
+
+// Notes aren't all scheduled the instant Play is pressed (the old approach)
+// -- instead each playbackTick() call (every 100ms, see below) hands Tone
+// whichever notes fall due within the next LOOKAHEAD_SEC. This is the
+// standard look-ahead-scheduler pattern, and it's what makes pause/stop
+// simple: releaseAll() plus no longer calling scheduleDueNotes() leaves at
+// most ~150ms of already-handed-off notes to finish on their own, instead of
+// needing to track and cancel every individual future-scheduled voice.
+const LOOKAHEAD_SEC = 0.15;
 
 function scheduleFrom(qStart) {
   const bpm = currentBpm();
   playbackStartAudioTime = audioCtx.currentTime + 0.08;
   playbackStartQ = qStart;
-  playbackData.noteInfo.forEach(info => {
-    if (info.onQ < qStart - 1e-6 || info.pitch == null) return;
-    const startSec = playbackStartAudioTime + qToSeconds(info.onQ - qStart, bpm);
+  scheduledNoteIds = new Set();
+}
+
+function scheduleDueNotes() {
+  const bpm = currentBpm();
+  const synth = ensurePolySynth();
+  const now = audioCtx.currentTime;
+  playbackData.noteInfo.forEach((info, id) => {
+    if (scheduledNoteIds.has(id)) return;
+    if (info.onQ < playbackStartQ - 1e-6 || info.pitch == null) { scheduledNoteIds.add(id); return; }
+    const startSec = playbackStartAudioTime + qToSeconds(info.onQ - playbackStartQ, bpm);
+    if (startSec - now > LOOKAHEAD_SEC) return; // not due yet, check again next tick
+    scheduledNoteIds.add(id);
     const durSec = Math.max(0.04, qToSeconds(info.offQ - info.onQ, bpm));
-    scheduledVoices.push(scheduleVoice(audioCtx, startSec, durSec, midiToFreq(info.pitch)));
+    synth.triggerAttackRelease(midiToFreq(info.pitch), durSec, Math.max(startSec, now));
   });
 }
 
 function clearScheduledVoices() {
-  scheduledVoices.forEach(o => { try { o.stop(); } catch (e) {} });
-  scheduledVoices = [];
+  if (polySynth) polySynth.releaseAll();
 }
 
 // Flips the pager to whichever page holds the currently-playing note (both
@@ -1379,6 +1397,7 @@ function playbackTick() {
   const elapsedSec = audioCtx.currentTime - playbackStartAudioTime;
   const q = Math.max(0, playbackStartQ + elapsedSec * (bpm / 60));
   playbackCurrentQ = q;
+  scheduleDueNotes();
   updatePlaybackTimeUI(q, playbackData.totalQ, bpm);
   followPlayback(q);
   if (q >= playbackData.totalQ + 1) {
@@ -1402,8 +1421,9 @@ async function startPlayback() {
     // several hundred ms, possibly long enough for the gesture to no longer
     // count by the time the context was created, leaving it reporting
     // "running" without ever truly attaching to the audio device.
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    ensureAudioContext();
     await audioCtx.resume();
+    await Tone.start();
     if (audioCtx.state !== 'running') throw new Error(`오디오 컨텍스트가 시작되지 않았습니다 (state: ${audioCtx.state})`);
     if (!playbackData) playbackData = buildPlaybackData();
     isPlaying = true;
@@ -1668,7 +1688,7 @@ async function handleFile(file) {
     // rather than doing that attachment for the very first time under
     // time pressure inside the click handler itself.
     try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      ensureAudioContext();
     } catch (e) { console.error(e); }
   } catch (err) {
     console.error(err);
