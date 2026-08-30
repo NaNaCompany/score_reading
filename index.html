@@ -1433,7 +1433,12 @@ async function startPlayback() {
   try {
     if (!playbackData) playbackData = buildPlaybackData();
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    // Always resume, even when .state already reads "running" -- a
+    // confirmed-working manual test called resume() unconditionally, while
+    // this only called it when suspended; some browsers report "running"
+    // immediately on a freshly created context without ever actually
+    // attaching it to the audio hardware until resume() is called explicitly.
+    await audioCtx.resume();
     if (audioCtx.state !== 'running') throw new Error(`오디오 컨텍스트가 시작되지 않았습니다 (state: ${audioCtx.state})`);
     isPlaying = true;
     lastScrolledId = null;
