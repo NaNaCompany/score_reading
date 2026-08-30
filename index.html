@@ -898,6 +898,39 @@ function colorizeMusicXML(xmlText, settings, titleInfo) {
 
       const state = {};
       const notes = Array.from(measure.children).filter(c => c.tagName === 'note');
+      // Chord tones share one combined label ("미·솔·도") on the chord's
+      // first note rather than one label each -- giving each stacked
+      // <chord/> note its own lyric <number> was tried first (expecting
+      // Verovio to lay out simultaneous verse lines stacked below the
+      // staff, the way multiple song verses stack), but empirically it
+      // draws them all at the exact same spot regardless of verse number,
+      // right back to the original illegible-overlap bug.
+      let pendingChordNote = null;
+      let pendingSyllables = [];
+      function flushPendingChordLabel() {
+        if (pendingChordNote && pendingSyllables.length) {
+          const lyric = doc.createElement('lyric');
+          lyric.setAttribute('number', 'solfege');
+          const syllabic = doc.createElement('syllabic');
+          syllabic.textContent = 'single';
+          const text = doc.createElement('text');
+          text.setAttribute('font-size', '8');
+          text.textContent = pendingSyllables.join('·');
+          lyric.appendChild(syllabic);
+          lyric.appendChild(text);
+          let lyricInserted = false;
+          for (const child of Array.from(pendingChordNote.children)) {
+            if (LYRIC_INSERT_BEFORE.has(child.tagName)) {
+              pendingChordNote.insertBefore(lyric, child);
+              lyricInserted = true;
+              break;
+            }
+          }
+          if (!lyricInserted) pendingChordNote.appendChild(lyric);
+        }
+        pendingChordNote = null;
+        pendingSyllables = [];
+      }
       notes.forEach(note => {
         const pitch = Array.from(note.children).find(c => c.tagName === 'pitch');
         if (!pitch) return;
@@ -940,41 +973,18 @@ function colorizeMusicXML(xmlText, settings, titleInfo) {
           if (!inserted) note.appendChild(notehead);
         }
 
-        // Only the first note of a chord gets a label (subsequent notes have
-        // a <chord/> marker) -- Verovio doesn't offset multiple simultaneous
-        // lyrics apart, so labeling every stacked note drew them all on top
-        // of each other into an unreadable mess.
         const isChordContinuation = !!Array.from(note.children).find(c => c.tagName === 'chord');
-        if (settings.showSolfege && settings.showSolfege.enabled && !isChordContinuation) {
+        if (settings.showSolfege && settings.showSolfege.enabled) {
           const syllable = STEP_TO_SOLFEGE[step];
+          if (!isChordContinuation) flushPendingChordLabel(); // this note starts a new chord (or is a lone note) -- write out the previous one
           if (syllable) {
             const accSuffix = { 2: '##', 1: '#', 0: '', '-1': 'b', '-2': 'bb' }[info.alter] || '';
-            const lyric = doc.createElement('lyric');
-            lyric.setAttribute('number', 'solfege');
-            const syllabic = doc.createElement('syllabic');
-            syllabic.textContent = 'single';
-            const text = doc.createElement('text');
-            // Ignored by Verovio (confirmed: any value, or none, renders at
-            // the same fixed size there -- see SOLFEGE_SCALE_FACTOR for how
-            // the preview/PDF actually shrink it), but kept for other
-            // notation software opening the downloaded MusicXML, which does
-            // read it.
-            text.setAttribute('font-size', '8');
-            text.textContent = syllable + accSuffix;
-            lyric.appendChild(syllabic);
-            lyric.appendChild(text);
-            let lyricInserted = false;
-            for (const child of Array.from(note.children)) {
-              if (LYRIC_INSERT_BEFORE.has(child.tagName)) {
-                note.insertBefore(lyric, child);
-                lyricInserted = true;
-                break;
-              }
-            }
-            if (!lyricInserted) note.appendChild(lyric);
+            if (!isChordContinuation) pendingChordNote = note;
+            if (pendingChordNote) pendingSyllables.push(syllable + accSuffix);
           }
         }
       });
+      flushPendingChordLabel(); // the measure's last chord/note never got a following note to trigger its flush
     });
   });
 
