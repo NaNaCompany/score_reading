@@ -1169,10 +1169,26 @@ async function ensureRenderers() {
 // device's actual pixel width; the CSS "contain" fit in .pane-body.paged
 // then shrinks this down to whatever the real screen size is, same as
 // desktop's page already relies on CSS to fit its container.
+// Mobile's virtual page height is derived from the pane box's own current
+// aspect ratio (not a fixed constant) -- a phone-narrow box and a wider
+// tablet/half-folded box need different page shapes for the CSS "contain"
+// fit to actually fill the box; a fixed ratio tuned for one leaves the other
+// with blank bars (reported: unused space above/below the score on a wider
+// box). pageWidth stays fixed since that's what controls measures-per-line.
+function mobilePaneAspect() {
+  const paneBody = document.getElementById('paneRightInner') &&
+    document.getElementById('paneRightInner').closest('.pane-body');
+  if (!paneBody || !paneBody.clientWidth || !paneBody.clientHeight) return 0.55;
+  const ratio = paneBody.clientWidth / paneBody.clientHeight;
+  return Math.min(1, Math.max(0.35, ratio)); // clamp: an oddly short/wide box would otherwise fit almost nothing per page, or absurdly little per line
+}
 function verovioOptions(desktop) {
-  return desktop
-    ? { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 }
-    : { pageWidth: 1600, pageHeight: 2909, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
+  if (desktop) {
+    return { pageWidth: 2100, pageHeight: 2970, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
+  }
+  const pageWidth = 1600;
+  const pageHeight = Math.round(pageWidth / mobilePaneAspect());
+  return { pageWidth, pageHeight, scale: desktopScale, breaks: 'auto', adjustPageHeight: false, footer: 'none', justifyVertically: true, pageMarginBottom: 220, bottomMarginHeader: 14 };
 }
 
 const pagerState = { current: 0, total: 1 };
@@ -1515,18 +1531,20 @@ function updateStatsUI(stats) {
   document.getElementById('statWhite').textContent = stats.white;
 }
 
-// Remembers the viewport shape as of the last render, so a later resize (a
-// crossing the desktop/mobile breakpoint) can tell whether the score needs
-// to be laid out again -- see handleViewportResize below. Mobile's own page
-// size is now a fixed constant (see verovioOptions), not device-width-based,
-// so a foldable unfolding or rotating *within* mobile width doesn't need a
-// re-render: the existing CSS "contain" fit already reflows that live.
+// Remembers the viewport shape as of the last render, so a later resize --
+// crossing the desktop/mobile breakpoint, or the mobile pane's aspect ratio
+// changing enough to matter (a foldable unfolding into a much wider/shorter
+// shape, rotating the device) -- can tell whether the score needs to be laid
+// out again. See handleViewportResize below.
 let lastRenderWasDesktop = null;
+let lastRenderMobileAspect = null;
 
 function updateModeUI() {
   document.querySelector('#paneLeftInner').closest('.pane-body').classList.add('paged');
   document.querySelector('#paneRightInner').closest('.pane-body').classList.add('paged');
-  lastRenderWasDesktop = isDesktopView();
+  const desktop = isDesktopView();
+  lastRenderWasDesktop = desktop;
+  lastRenderMobileAspect = desktop ? null : mobilePaneAspect();
 }
 
 function getTitleInfo() {
@@ -1580,14 +1598,21 @@ function scheduleRenderRight() {
   debounceTimer = setTimeout(() => { renderRight(); }, 200);
 }
 
-// Re-renders only when the window actually crosses the desktop/mobile
-// breakpoint (e.g. a foldable phone unfolding past 900px, or a browser
-// window being resized across it) -- that's the only width change that
-// changes Verovio's page options now.
+// Re-renders when the window crosses the desktop/mobile breakpoint, or (in
+// mobile mode) when the pane's aspect ratio shifts enough to matter -- e.g.
+// unfolding a foldable phone into a much wider/shorter shape.
 let viewportResizeTimer = null;
 function handleViewportResize() {
   if (!rawXmlText || !vrvLeft || !vrvRight) return;
-  if (isDesktopView() === lastRenderWasDesktop) return;
+  const desktop = isDesktopView();
+  if (desktop !== lastRenderWasDesktop) {
+    // falls through to re-render below
+  } else if (desktop) {
+    return; // desktop's page shape doesn't depend on window size
+  } else {
+    const aspect = mobilePaneAspect();
+    if (lastRenderMobileAspect !== null && Math.abs(aspect - lastRenderMobileAspect) < 0.08) return;
+  }
   pagerState.current = 0;
   renderLeft();
   renderRight();
@@ -1802,25 +1827,34 @@ function scaleSvgTextElements(svgRoot, selector, scaleFactor) {
 }
 const SOLFEGE_SCALE_FACTOR = 0.72;
 
-// Removes solfege labels that would render on top of each other. The
+// Removes solfege labels that duplicate the same note position. The
 // per-note <chord/> skip in colorizeMusicXML only dedupes notes stacked in
 // the SAME voice; simultaneous notes written as separate voices/staves (very
 // common in piano music -- e.g. a second voice doubling a note, or a
 // cross-staff unison) aren't marked with <chord/> at all, so Verovio still
-// lays both labels at (nearly) the same spot. Catching it here, after
-// layout, covers both cases regardless of how the source XML expressed them.
+// lays both labels at (nearly) the exact same spot (observed: 0-2 SVG units
+// apart in both x and y). This must stay a near-exact-position match rather
+// than "bounding boxes touch" -- a full-rectangle-overlap check (the
+// original approach) also fired on merely ADJACENT notes in a fast passage,
+// where a wide accidental glyph ("#") can make one label's box brush the
+// next distinct note's box, incorrectly deleting real, non-duplicate labels.
 function dedupeOverlappingVerses(svgRoot) {
-  function rectsOverlap(a, b) {
-    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-  }
+  const CENTER_TOLERANCE = 30; // SVG units; true duplicates are ~0-2 apart, real neighbors are much further
   const verses = Array.from(svgRoot.querySelectorAll('g.verse'));
-  const boxes = verses.map(g => { try { return g.getBBox(); } catch (e) { return null; } });
+  const centers = verses.map(g => {
+    try {
+      const b = g.getBBox();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    } catch (e) { return null; }
+  });
   const removed = new Array(verses.length).fill(false);
   for (let i = 0; i < verses.length; i++) {
-    if (!boxes[i] || removed[i]) continue;
+    if (!centers[i] || removed[i]) continue;
     for (let j = i + 1; j < verses.length; j++) {
-      if (!boxes[j] || removed[j]) continue;
-      if (rectsOverlap(boxes[i], boxes[j])) removed[j] = true;
+      if (!centers[j] || removed[j]) continue;
+      if (Math.abs(centers[i].x - centers[j].x) < CENTER_TOLERANCE && Math.abs(centers[i].y - centers[j].y) < CENTER_TOLERANCE) {
+        removed[j] = true;
+      }
     }
   }
   verses.forEach((g, i) => { if (removed[i]) g.remove(); });
