@@ -1318,7 +1318,9 @@ function buildPlaybackData() {
 // manage its own separate context risked hitting the exact "reports running
 // but never actually reaches the speakers" issue this session spent hours
 // chasing with a hand-rolled oscillator, which only ever turned out to be
-// reliably audible on this specific, carefully-warmed context.
+// reliably audible on this specific, carefully-warmed context. Kept as a
+// fallback voice for whenever the real piano samples below aren't loaded
+// yet (or fail to load at all) -- playback should never go back to silent.
 function ensurePolySynth() {
   if (!polySynth) {
     polySynth = new Tone.PolySynth(Tone.Synth, {
@@ -1327,6 +1329,42 @@ function ensurePolySynth() {
     }).toDestination();
   }
   return polySynth;
+}
+
+// Real recorded piano notes (CDN, pinned to a commit so the file layout
+// can't change under us) sampled every minor third (28 notes, ~5MB) rather
+// than every semitone (85 notes, ~15MB) -- Tone.Sampler pitch-shifts a
+// couple of semitones from the nearest sample convincingly enough that the
+// difference isn't worth 3x the download for a sight-reading aid.
+const PIANO_SAMPLE_BASE = 'https://cdn.jsdelivr.net/gh/nbrosowsky/tonejs-instruments@622c2f1c32c8cfce4158ddc3eb26e518ddef37e5/samples/piano/';
+const PIANO_SAMPLE_NOTES = [['C', 'C'], ['Ds', 'D#'], ['Fs', 'F#'], ['A', 'A']];
+let pianoSampler = null;
+let pianoSamplerLoaded = false;
+function ensurePianoSampler() {
+  if (!pianoSampler) {
+    const urls = {};
+    for (let octave = 1; octave <= 7; octave++) {
+      PIANO_SAMPLE_NOTES.forEach(([file, toneName]) => { urls[`${toneName}${octave}`] = `${file}${octave}.mp3`; });
+    }
+    pianoSampler = new Tone.Sampler({
+      urls,
+      baseUrl: PIANO_SAMPLE_BASE,
+      onload: () => { pianoSamplerLoaded = true; },
+      onerror: (err) => console.error('피아노 샘플 로딩 실패, 신디사이저로 대체합니다:', err),
+    }).toDestination();
+  }
+  return pianoSampler;
+}
+// Kicks off sample downloading immediately (called at page load, well before
+// any file is opened or Play is pressed) so they're likely already loaded by
+// the time playback actually starts. ensureAudioContext() here just creates
+// the context for Tone to decode into -- it stays suspended (no sound, no
+// autoplay-policy violation) until the user's own click resumes it.
+function prewarmPianoSampler() {
+  try {
+    ensureAudioContext();
+    ensurePianoSampler();
+  } catch (e) { console.error(e); }
 }
 
 // Notes aren't all scheduled the instant Play is pressed (the old approach)
@@ -1347,7 +1385,10 @@ function scheduleFrom(qStart) {
 
 function scheduleDueNotes() {
   const bpm = currentBpm();
-  const synth = ensurePolySynth();
+  // Real piano samples if they've finished loading by now, otherwise the
+  // synth -- never blocks playback on the (much larger, sometimes slow)
+  // sample download.
+  const synth = (pianoSampler && pianoSamplerLoaded) ? pianoSampler : ensurePolySynth();
   const now = audioCtx.currentTime;
   playbackData.noteInfo.forEach((info, id) => {
     if (scheduledNoteIds.has(id)) return;
@@ -1361,7 +1402,10 @@ function scheduleDueNotes() {
 }
 
 function clearScheduledVoices() {
+  // Playback can switch from the fallback synth to the piano sampler
+  // mid-session (as soon as loading finishes), so both may have live notes.
   if (polySynth) polySynth.releaseAll();
+  if (pianoSampler) pianoSampler.releaseAll();
 }
 
 // Flips the pager to whichever page holds the currently-playing note (both
@@ -2193,6 +2237,11 @@ function base64ToFile(b64, name) {
     }
   });
 });
+
+// Start downloading the piano samples the moment the page loads, not when a
+// score is opened or Play is pressed -- gives the ~5MB download the most
+// possible time to finish in the background before it's actually needed.
+prewarmPianoSampler();
 </script>
 </body>
 </html>
