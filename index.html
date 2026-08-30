@@ -391,7 +391,29 @@
     border-radius: 6px;
     font: inherit;
   }
-  #playbackTime { min-width: 90px; text-align: center; font-variant-numeric: tabular-nums; }
+  .playback-control input[type=range] {
+    accent-color: var(--purple);
+    vertical-align: middle;
+  }
+  #bpmSlider { width: 100px; }
+  #volumeControl { display: flex; align-items: center; gap: 6px; }
+  #volumeSlider { width: 90px; }
+
+  .playback-seek {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .playback-seek span { min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
+  .playback-seek input[type=range] {
+    flex: 1;
+    max-width: 420px;
+    accent-color: var(--purple);
+  }
 
   @media (min-width: 900px) {
     .previews { flex-direction: row; gap: 20px; }
@@ -621,7 +643,13 @@
       <button id="playPauseBtn" type="button">▶ 재생</button>
       <button id="stopBtn" type="button" class="secondary" disabled>■ 정지</button>
       <label for="bpmInput">BPM <input type="number" id="bpmInput" min="20" max="300" value="140"></label>
-      <span id="playbackTime">0:00 / 0:00</span>
+      <input type="range" id="bpmSlider" min="20" max="300" value="140" step="1" title="BPM">
+      <label id="volumeControl" for="volumeSlider">🔊 <input type="range" id="volumeSlider" min="0" max="100" value="100"></label>
+    </div>
+    <div class="playback-seek" id="playbackSeek">
+      <span id="playbackTimeCurrent">0:00</span>
+      <input type="range" id="seekSlider" min="0" max="1" value="0" step="0.01">
+      <span id="playbackTimeTotal">0:00</span>
     </div>
 
     <div class="stats" id="stats">
@@ -1270,6 +1298,7 @@ let isPlaying = false;
 let playbackIntervalId = null;
 let lastScrolledId = null;
 let lastPageShown = null;
+let seekDragging = false;      // true while the user is dragging the seek slider's thumb
 
 // Single place that creates audioCtx -- always immediately points Tone.js
 // at this exact context (rather than letting Tone create its own) so every
@@ -1441,8 +1470,14 @@ function followPlayback(qCurrent) {
 }
 
 function updatePlaybackTimeUI(qCurrent, totalQ, bpm) {
-  document.getElementById('playbackTime').textContent =
-    `${formatTime(qToSeconds(qCurrent, bpm))} / ${formatTime(qToSeconds(totalQ, bpm))}`;
+  document.getElementById('playbackTimeCurrent').textContent = formatTime(qToSeconds(qCurrent, bpm));
+  document.getElementById('playbackTimeTotal').textContent = formatTime(qToSeconds(totalQ, bpm));
+  const seekSlider = document.getElementById('seekSlider');
+  seekSlider.max = totalQ || 1;
+  // Don't fight the user's own drag -- playbackTick() calls this every
+  // 100ms during playback, which would otherwise snap the thumb back to
+  // the playing position while they're still holding it.
+  if (!seekDragging) seekSlider.value = qCurrent;
 }
 
 function playbackTick() {
@@ -1516,15 +1551,53 @@ document.getElementById('playPauseBtn').addEventListener('click', () => {
   else startPlayback();
 });
 document.getElementById('stopBtn').addEventListener('click', stopPlayback);
-document.getElementById('bpmInput').addEventListener('change', () => {
+
+function applyBpmChange() {
   if (!isPlaying) {
     if (playbackData) updatePlaybackTimeUI(playbackCurrentQ, playbackData.totalQ, currentBpm());
     return;
   }
-  // Already-scheduled oscillators have fixed start times, so a tempo change
-  // mid-playback means re-scheduling everything from here on at the new BPM.
+  // Notes already handed to Tone keep their originally-scheduled times, so a
+  // tempo change mid-playback means re-deriving everything from here on at
+  // the new BPM (only affects future, not-yet-triggered notes).
   clearScheduledVoices();
   scheduleFrom(playbackCurrentQ);
+}
+const bpmInput = document.getElementById('bpmInput');
+const bpmSlider = document.getElementById('bpmSlider');
+bpmInput.addEventListener('change', () => {
+  bpmSlider.value = bpmInput.value;
+  applyBpmChange();
+});
+bpmSlider.addEventListener('input', () => {
+  bpmInput.value = bpmSlider.value;
+  applyBpmChange();
+});
+
+// Volume: a single control point since both the fallback synth and the
+// piano sampler connect via .toDestination() -- adjusting Tone's own output
+// gain affects whichever one is actually playing.
+document.getElementById('volumeSlider').addEventListener('input', (e) => {
+  const linear = parseInt(e.target.value, 10) / 100;
+  Tone.getDestination().volume.value = linear > 0 ? Tone.gainToDb(linear) : -Infinity;
+});
+
+const seekSlider = document.getElementById('seekSlider');
+seekSlider.addEventListener('input', () => {
+  seekDragging = true;
+  if (playbackData) updatePlaybackTimeUI(parseFloat(seekSlider.value), playbackData.totalQ, currentBpm());
+});
+seekSlider.addEventListener('change', () => {
+  const q = Math.max(0, parseFloat(seekSlider.value));
+  playbackCurrentQ = q;
+  lastScrolledId = null; // let follow-page re-evaluate from the new position
+  if (isPlaying) {
+    clearScheduledVoices();
+    scheduleFrom(q);
+  } else if (playbackData) {
+    updatePlaybackTimeUI(q, playbackData.totalQ, currentBpm());
+  }
+  seekDragging = false;
 });
 
 let scrollLinked = false;
@@ -1732,7 +1805,11 @@ async function handleFile(file) {
     await renderRight();
     try {
       playbackData = buildPlaybackData();
-      document.getElementById('bpmInput').value = Math.round(playbackData.baseTempo);
+      const detectedBpm = Math.round(playbackData.baseTempo);
+      document.getElementById('bpmInput').value = detectedBpm;
+      document.getElementById('bpmSlider').value = detectedBpm;
+      document.getElementById('seekSlider').max = playbackData.totalQ || 1;
+      document.getElementById('seekSlider').value = 0;
     } catch (e) { console.error(e); }
     // Create (but don't resume) the AudioContext as soon as a score is
     // loaded, well before the user ever presses play -- it stays suspended
