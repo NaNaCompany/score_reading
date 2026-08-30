@@ -909,9 +909,20 @@ function colorizeMusicXML(xmlText, settings, titleInfo) {
 
   const stats = { notes: 0, sharp: 0, doubleSharp: 0, flat: 0, doubleFlat: 0, white: 0, breaksRemoved: 0, dynamics: 0, expression: 0 };
 
+  // Every note gets an explicit id (Verovio preserves a provided id verbatim
+  // rather than auto-generating its own -- confirmed empirically), so that
+  // buildPlaybackData() can look up this exact same id in Verovio's own
+  // rendered timemap later, and use it below to build tieContinuationOf: a
+  // map from a tied-into note's id to the id of the tie chain's FIRST note.
+  // Without this, playback re-attacks every tied note individually instead
+  // of sustaining one continuous sound across the tie.
+  let noteIdCounter = 0;
+  const tieContinuationOf = new Map();
+
   const parts = Array.from(root.children).filter(c => c.tagName === 'part');
   parts.forEach(part => {
     let fifths = 0;
+    const tieOpen = {}; // key (staff|step|octave) -> id of that tie chain's first note; ties can span barlines, so this persists across the part's measures, not reset per measure
     const measures = Array.from(part.children).filter(c => c.tagName === 'measure');
     measures.forEach(measure => {
       const fifthsEl = measure.querySelector(':scope > attributes > key > fifths');
@@ -969,6 +980,17 @@ function colorizeMusicXML(xmlText, settings, titleInfo) {
         const staffEl = Array.from(note.children).find(c => c.tagName === 'staff');
         const staff = staffEl ? staffEl.textContent : '1';
         const key = staff + '|' + step + '|' + octave;
+
+        const noteId = 'shNote' + (noteIdCounter++);
+        note.setAttribute('id', noteId);
+        const tieTypes = Array.from(note.children).filter(c => c.tagName === 'tie').map(t => t.getAttribute('type'))
+          .concat(Array.from(note.querySelectorAll('notations > tied')).map(t => t.getAttribute('type')));
+        if (tieTypes.includes('stop') && tieOpen[key]) {
+          tieContinuationOf.set(noteId, tieOpen[key]);
+          if (!tieTypes.includes('start')) delete tieOpen[key];
+        } else if (tieTypes.includes('start')) {
+          tieOpen[key] = noteId;
+        }
 
         const accEl = Array.from(note.children).find(c => c.tagName === 'accidental');
         let info;
@@ -1040,7 +1062,7 @@ function colorizeMusicXML(xmlText, settings, titleInfo) {
   if (!/^<\?xml/.test(outStr)) {
     outStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + outStr;
   }
-  return { xml: outStr, stats };
+  return { xml: outStr, stats, tieContinuationOf };
 }
 
 /* ===================== minimal ZIP reader (for .mxl) ===================== */
@@ -1161,6 +1183,7 @@ const downloadBtn = document.getElementById('downloadBtn');
 let rawXmlText = null;
 let fileBase = 'score';
 let lastColoredXml = null;
+let lastTieContinuationOf = new Map(); // continuation note id -> id of that tie chain's first note, see colorizeMusicXML
 let vrvLeft = null, vrvRight = null;
 let desktopScale = 40;
 
@@ -1238,10 +1261,12 @@ function renderCurrentPage() {
   const n = pagerState.current + 1;
   leftEl.innerHTML = vrvLeft.renderToSVG(n);
   rightEl.innerHTML = vrvRight.renderToSVG(n);
-  const previewTitle = getTitleInfo().title;
+  const previewTitleInfo = getTitleInfo();
   [leftEl, rightEl].forEach(el => {
     const svg = el.querySelector('svg');
-    if (svg) enlargeCreditText(svg, previewTitle, TITLE_SCALE_FACTOR);
+    if (!svg) return;
+    enlargeCreditText(svg, previewTitleInfo.title, TITLE_SCALE_FACTOR);
+    resolveCreditCollision(svg, previewTitleInfo.title, previewTitleInfo.composer);
   });
   const rightSvg = rightEl.querySelector('svg');
   if (rightSvg) colorDynamicsInSvg(rightSvg, settings);
@@ -1348,6 +1373,20 @@ function buildPlaybackData() {
   noteInfo.forEach((info, id) => {
     try { info.pitch = vrvRight.getMIDIValuesForElement(id).pitch; } catch (e) { info.pitch = null; }
     if (info.offQ == null) info.offQ = info.onQ + 1;
+  });
+  // A tied note is still a separate on/off event in Verovio's timemap (it's
+  // a genuinely separate <note> element), which without this would
+  // re-trigger the sample/synth partway through what should be one
+  // continuous sustained sound. Extend the tie chain's first note to cover
+  // the continuation's duration, then null out the continuation's pitch --
+  // scheduleDueNotes() already skips any note with pitch == null.
+  lastTieContinuationOf.forEach((rootId, continuationId) => {
+    const rootInfo = noteInfo.get(rootId);
+    const contInfo = noteInfo.get(continuationId);
+    if (rootInfo && contInfo) {
+      rootInfo.offQ = Math.max(rootInfo.offQ, contInfo.offQ);
+      contInfo.pitch = null;
+    }
   });
   return { timemap, noteInfo, totalQ, baseTempo };
 }
@@ -1672,8 +1711,9 @@ async function renderRight() {
   playbackData = null; // vrvRight.loadData() below reassigns element IDs, invalidating any cached timing/pitch data
   statusRight.textContent = '렌더링 중...';
   try {
-    const { xml, stats } = colorizeMusicXML(rawXmlText, settings, getTitleInfo());
+    const { xml, stats, tieContinuationOf } = colorizeMusicXML(rawXmlText, settings, getTitleInfo());
     lastColoredXml = xml;
+    lastTieContinuationOf = tieContinuationOf;
     updateStatsUI(stats);
     updateModeUI();
     vrvRight.setOptions(verovioOptions(isDesktopView()));
@@ -1911,6 +1951,39 @@ function enlargeCreditText(svgRoot, textContent, scaleFactor) {
 }
 
 const TITLE_SCALE_FACTOR = 2.4;
+
+// The title and composer credits are laid out (see applyTitleComposer) to
+// sit side by side on roughly the same line -- title centered, composer
+// right-aligned -- which only works while the title is still its normal
+// font size. enlargeCreditText() then blows the title up to TITLE_SCALE_FACTOR
+// from its own center, and a wide/multi-word title's enlarged width can
+// reach right into the composer's spot. Pushes the composer straight down
+// below the now-larger title whenever they actually overlap.
+function resolveCreditCollision(svgRoot, titleText, composerText) {
+  if (!titleText || !composerText) return;
+  const texts = Array.from(svgRoot.querySelectorAll('text'));
+  const titleEl = texts.find(t => t.textContent.trim() === titleText.trim());
+  const composerEl = texts.find(t => t.textContent.trim() === composerText.trim());
+  if (!titleEl || !composerEl) return;
+  // getBBox() ignores ancestor transforms, so it would report the title's
+  // PRE-enlargeCreditText-scaling size here (that scaling is an ancestor <g>
+  // wrapped around titleEl, not on titleEl itself) -- getBoundingClientRect(),
+  // like resolveDynamicsCollisions above already relies on for the same
+  // reason, reflects the actual on-screen (post-scale) box.
+  let titleBox, composerBox;
+  try { titleBox = titleEl.getBoundingClientRect(); composerBox = composerEl.getBoundingClientRect(); } catch (e) { return; }
+  const overlaps = titleBox.x < composerBox.x + composerBox.width && titleBox.x + titleBox.width > composerBox.x &&
+    titleBox.y < composerBox.y + composerBox.height && titleBox.y + titleBox.height > composerBox.y;
+  if (!overlaps) return;
+  let ctm;
+  try { ctm = composerEl.getScreenCTM(); } catch (e) { ctm = null; }
+  const scaleY = ctm ? Math.hypot(ctm.b, ctm.d) : 1; // screen px per local SVG unit, to convert the px shift below back to SVG units
+  const shiftPx = (titleBox.y + titleBox.height) - composerBox.y + 20;
+  const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  wrapper.setAttribute('transform', `translate(0, ${shiftPx / scaleY})`);
+  composerEl.parentNode.insertBefore(wrapper, composerEl);
+  wrapper.appendChild(composerEl);
+}
 
 // Same technique as enlargeCreditText (geometric scaling in place, anchored
 // on each element's own bbox center), but applied to every match of a
@@ -2219,6 +2292,7 @@ downloadPdfBtn.addEventListener('click', async () => {
       const ottavaLabels = findOttavaLabels(svgEl);
       stripOttavaLabels(ottavaLabels);
       enlargeCreditText(svgEl, titleInfo.title, TITLE_SCALE_FACTOR);
+      resolveCreditCollision(svgEl, titleInfo.title, titleInfo.composer);
       colorDynamicsInSvg(svgEl, settings);
       resolveDynamicsCollisions(svgEl);
       if (settings.showSolfege && settings.showSolfege.enabled) {
@@ -2307,6 +2381,10 @@ function base64ToFile(b64, name) {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new File([bytes], name);
 }
+// Overrides the tempo auto-detected from the file's own <sound tempo="...">
+// for specific samples -- the Rachmaninoff sample's embedded tempo (102)
+// reads too slow for how the piece is actually meant to go.
+const SAMPLE_BPM_PRESET = { rachmaninov: 168 };
 [document.getElementById('sampleBtn1'), document.getElementById('sampleBtn2')].forEach(btn => {
   btn.addEventListener('click', async () => {
     const originalLabel = btn.textContent;
@@ -2315,6 +2393,12 @@ function base64ToFile(b64, name) {
     try {
       const file = base64ToFile(SAMPLE_DATA[btn.dataset.key], btn.dataset.name);
       await handleFile(file);
+      const bpmPreset = SAMPLE_BPM_PRESET[btn.dataset.key];
+      if (bpmPreset) {
+        document.getElementById('bpmInput').value = bpmPreset;
+        document.getElementById('bpmSlider').value = bpmPreset;
+        applyBpmChange();
+      }
     } catch (err) {
       console.error(err);
       setGlobalError('샘플 로드 오류: ' + err.message);
