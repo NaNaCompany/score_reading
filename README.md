@@ -9,3 +9,7 @@ GitHub Pages는 main 브랜치 루트를 배포합니다. 기존 렌더링·오�
 ## 사이트 메타데이터·게시자 통합
 
 `node tools/site_metadata.mjs`로 canonical, 4대 태그와 GTM noscript, sitemap.xml, robots.txt, ads.txt를 재생성합니다. `node --test tests/publisher.test.mjs`로 로컬 요청 차단과 입력값 제외를 검사합니다.
+
+## 샘플 악보
+
+첫 화면에서 라흐마니노프 Op. 39 No. 6 또는 바르톡 Allegro barbaro를 바로 열 수 있습니다. 사용자가 공개 샘플로 제공한 MusicXML에서 `<identification>`과 하위 요소만 제거한 파일이며 색상·악보 데이터는 유지합니다. 원본 첨부는 변경하지 않았습니다. `samples/manifest.json`에 파일명·해시·변경 내역을 기록합니다. 샘플은 클릭할 때만 가져오며 곡명·작곡가가 없는 파일은 표시용 정보를 보충합니다.
