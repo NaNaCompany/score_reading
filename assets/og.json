@@ -1,0 +1,12 @@
+{
+  "file": "assets/og-d4bd637d567f.png",
+  "width": 1200,
+  "height": 630,
+  "type": "image/png",
+  "sha256": "d4bd637d567f98035b6870879bda5345ba0f0bfca7d10157b842e544f32ef70c",
+  "title": "초견 도우미",
+  "alt": "초견 도우미 — 변화표·셈여림·표현 기호를 색상으로 표시한 악보 카드",
+  "source": "Original procedural illustration; no uploaded score or external image used",
+  "generator": "tools/build_og.py",
+  "font_note": "Rendered with installed system fonts; no font files redistributed"
+}
