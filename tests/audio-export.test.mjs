@@ -44,7 +44,7 @@ test('repeat restarts from zero; non-repeat keeps tail; Stop cancels repeat and 
  const html=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
  const extract=(start,end)=>html.slice(html.indexOf(start),html.indexOf(end,html.indexOf(start)));
  const controls={repeatPlayback:{checked:true},playPauseBtn:{},stopBtn:{}};
- const calls=[];const c={document:{getElementById:id=>controls[id]},isPlaying:true,audioCtx:{currentTime:3},playbackStartAudioTime:0,playbackStartQ:0,playbackCurrentQ:0,playbackData:{totalQ:2},playbackRun:1,playbackStarting:true,playbackIntervalId:42,lastScrolledId:'old',currentBpm:()=>60,scheduleDueNotes(){},updatePlaybackTimeUI(){},followPlayback(){},clearScheduledVoices(){calls.push('clear')},scheduleFrom:q=>calls.push(q),clearInterval:id=>calls.push(id)};
+ const calls=[];const c={document:{getElementById:id=>controls[id]},isPlaying:true,audioCtx:{currentTime:3},playbackStartAudioTime:0,playbackStartQ:0,playbackCurrentQ:0,playbackData:{totalQ:2},playbackRun:1,playbackStarting:true,playbackIntervalId:42,lastScrolledId:'old',currentBpm:()=>60,scheduleDueNotes(){},updatePlaybackTimeUI(){},followPlayback(){},clearScheduledVoices(){calls.push('clear')},releaseRepeatVoices(){calls.push('release')},scheduleFrom:q=>calls.push(q),clearInterval:id=>calls.push(id)};
  vm.createContext(c);
  vm.runInContext(extract('function playbackTick()','async function startPlayback()'),c);
  vm.runInContext(extract('function pausePlayback()','document.getElementById(\'playPauseBtn\').addEventListener'),c);
@@ -53,4 +53,18 @@ test('repeat restarts from zero; non-repeat keeps tail; Stop cancels repeat and 
  controls.repeatPlayback.checked=false;c.isPlaying=true;c.audioCtx.currentTime=2.5;
  vm.runInContext('playbackTick()',c);assert.equal(c.isPlaying,true);
  c.audioCtx.currentTime=3;vm.runInContext('playbackTick()',c);assert.equal(c.isPlaying,false);
+});
+test('repeated natural boundaries keep the loaded piano and never construct fallback voices',()=>{
+ const html=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
+ const extract=(a,b)=>html.slice(html.indexOf(a),html.indexOf(b,html.indexOf(a)));
+ let released=0,attacks=0;const piano={releaseAll(){released++},triggerAttackRelease(){attacks++},dispose(){throw Error('repeat disposed piano')}};
+ const c={pianoSampler:piano,pianoSamplerLoaded:true,polySynth:null,audioCtx:{currentTime:0},playbackStartAudioTime:0,playbackStartQ:0,scheduledNoteIds:new Set(),LOOKAHEAD_SEC:0.15,playbackData:{noteInfo:new Map([['a',{onQ:0,offQ:1,pitch:60}]])},currentBpm:()=>60,qToSeconds:q=>q,midiToFreq:p=>p,ensurePolySynth(){throw Error('fallback selected')}};
+ vm.createContext(c);
+ vm.runInContext(extract('function scheduleDueNotes()', '// At a natural repeat boundary'),c);
+ vm.runInContext(extract('function releaseRepeatVoices()', 'function clearScheduledVoices()'),c);
+ for(let i=0;i<30;i++){
+  c.scheduledNoteIds=new Set();vm.runInContext('scheduleDueNotes(); releaseRepeatVoices()',c);
+  assert.equal(c.pianoSampler,piano);assert.equal(c.pianoSamplerLoaded,true);
+ }
+ assert.equal(attacks,30);assert.equal(released,30);
 });
