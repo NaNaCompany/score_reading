@@ -1513,6 +1513,14 @@ function scheduleDueNotes() {
   });
 }
 
+// At a natural repeat boundary there are no future attacks from the old
+// pass: all note onsets are before totalQ. Release its tails without disposing
+// the decoded piano samples. Explicit Stop/seek still cancel queued voices.
+function releaseRepeatVoices() {
+  if (polySynth) polySynth.releaseAll();
+  if (pianoSampler) pianoSampler.releaseAll();
+}
+
 function clearScheduledVoices() {
   // Playback can switch from the fallback synth to the piano sampler
   // mid-session (as soon as loading finishes), so both may have live notes.
@@ -1568,7 +1576,7 @@ function playbackTick() {
   const repeating = document.getElementById('repeatPlayback').checked;
   if (q >= playbackData.totalQ + (repeating ? 0 : 1)) {
     if (repeating && playbackData.totalQ > 0) {
-      clearScheduledVoices();
+      releaseRepeatVoices();
       playbackCurrentQ = 0;
       lastScrolledId = null;
       scheduleFrom(0);
