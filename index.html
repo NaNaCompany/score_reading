@@ -568,6 +568,7 @@
 <meta name="twitter:image:alt" content="초견 도우미 — 변화표·셈여림·표현 기호를 색상으로 표시한 악보 카드">
 <link rel="icon" href="assets/icon.svg">
 <!-- NaNa publisher integrations: GA4, GTM, AdSense, Cloudflare -->
+<script src="js/audio-export.js"></script>
 <script>(function(){
 if(!['nanalab.kr','www.nanalab.kr','nanacompany.github.io'].includes(location.hostname.toLowerCase()))return;
 function load(src,attrs){var s=document.createElement('script');s.async=true;s.src=src;for(var k in attrs)s.setAttribute(k,attrs[k]);document.head.appendChild(s);}
@@ -670,6 +671,9 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     <div class="playback-control" id="playbackControl">
       <button id="playPauseBtn" type="button">▶ 재생</button>
       <button id="stopBtn" type="button" class="secondary" disabled>■ 정지</button>
+      <label><input type="checkbox" id="repeatPlayback"> 연속 반복</label>
+      <button id="downloadWavBtn" type="button" class="secondary">♫ WAV 다운로드</button>
+      <span id="wavStatus" role="status" aria-live="polite"></span>
       <label for="bpmInput">BPM <input type="number" id="bpmInput" min="20" max="300" value="140"></label>
       <input type="range" id="bpmSlider" min="20" max="300" value="140" step="1" title="BPM">
       <label id="volumeControl" for="volumeSlider">🔊 <input type="range" id="volumeSlider" min="0" max="100" value="100"></label>
@@ -1339,6 +1343,9 @@ measuresSlider.addEventListener('input', async () => {
 // (baked in at the score's own tempo) is used throughout so the BPM control
 // can rescale playback speed freely.
 
+let playbackRun = 0;
+let playbackStarting = false;
+let wavExporting = false;
 let audioCtx = null;
 let playbackData = null;       // { timemap, noteInfo: Map<id,{onQ,offQ,pitch}>, totalQ }
 let polySynth = null;          // Tone.js PolySynth, created lazily against audioCtx
@@ -1509,8 +1516,11 @@ function scheduleDueNotes() {
 function clearScheduledVoices() {
   // Playback can switch from the fallback synth to the piano sampler
   // mid-session (as soon as loading finishes), so both may have live notes.
-  if (polySynth) polySynth.releaseAll();
-  if (pianoSampler) pianoSampler.releaseAll();
+  if (polySynth) { polySynth.dispose(); polySynth = null; }
+  if (pianoSampler) {
+    pianoSampler.dispose(); pianoSampler = null; pianoSamplerLoaded = false;
+    ensurePianoSampler();
+  }
 }
 
 // Flips the pager to whichever page holds the currently-playing note (both
@@ -1555,13 +1565,23 @@ function playbackTick() {
   scheduleDueNotes();
   updatePlaybackTimeUI(q, playbackData.totalQ, bpm);
   followPlayback(q);
-  if (q >= playbackData.totalQ + 1) {
-    stopPlayback();
+  const repeating = document.getElementById('repeatPlayback').checked;
+  if (q >= playbackData.totalQ + (repeating ? 0 : 1)) {
+    if (repeating && playbackData.totalQ > 0) {
+      clearScheduledVoices();
+      playbackCurrentQ = 0;
+      lastScrolledId = null;
+      scheduleFrom(0);
+      updatePlaybackTimeUI(0, playbackData.totalQ, bpm);
+    } else stopPlayback();
   }
 }
 
 async function startPlayback() {
-  if (!rawXmlText || !vrvRight) return;
+  if (!rawXmlText || !vrvRight || playbackStarting || isPlaying) return;
+  const run = ++playbackRun;
+  playbackStarting = true;
+  document.getElementById('stopBtn').disabled = false;
   // Nothing here previously caught a failure (a rejected/blocked
   // AudioContext.resume() being the likely real-world case, e.g. a
   // restrictive in-app browser's autoplay policy) -- isPlaying never got
@@ -1579,6 +1599,7 @@ async function startPlayback() {
     ensureAudioContext();
     await audioCtx.resume();
     await Tone.start();
+    if (run !== playbackRun) return;
     if (audioCtx.state !== 'running') throw new Error(`오디오 컨텍스트가 시작되지 않았습니다 (state: ${audioCtx.state})`);
     if (!playbackData) playbackData = buildPlaybackData();
     isPlaying = true;
@@ -1591,12 +1612,18 @@ async function startPlayback() {
     playbackIntervalId = setInterval(playbackTick, 100);
   } catch (err) {
     console.error(err);
-    isPlaying = false;
-    setGlobalError('재생을 시작할 수 없습니다: ' + err.message + ' (다른 브라우저나 인앱 브라우저가 아닌 일반 브라우저에서 시도해보세요)');
+    if (run === playbackRun) {
+      stopPlayback();
+      setGlobalError('재생을 시작할 수 없습니다: ' + err.message + ' (다른 브라우저나 인앱 브라우저가 아닌 일반 브라우저에서 시도해보세요)');
+    }
+  } finally {
+    if (run === playbackRun) playbackStarting = false;
   }
 }
 
 function pausePlayback() {
+  playbackRun++;
+  playbackStarting = false;
   isPlaying = false;
   if (playbackIntervalId) clearInterval(playbackIntervalId);
   playbackIntervalId = null;
@@ -1617,6 +1644,26 @@ document.getElementById('playPauseBtn').addEventListener('click', () => {
   else startPlayback();
 });
 document.getElementById('stopBtn').addEventListener('click', stopPlayback);
+document.getElementById('downloadWavBtn').addEventListener('click', async () => {
+  if (wavExporting) return;
+  const status = document.getElementById('wavStatus');
+  if (!rawXmlText || !vrvRight) { status.textContent = '먼저 악보를 불러와주세요.'; return; }
+  const button = document.getElementById('downloadWavBtn');
+  wavExporting = true; button.disabled = true;
+  const bpm = currentBpm(); // numeric input, not the possibly stale slider
+  status.textContent = `${bpm} BPM · 처음부터 끝까지 1회분 생성 중…`;
+  try {
+    const data = playbackData || buildPlaybackData();
+    const wav = await ScoreAudioExport.render(data, bpm, PIANO_SAMPLE_BASE, Number(document.getElementById('volumeSlider').value) / 100);
+    const url = URL.createObjectURL(new Blob([wav], {type: 'audio/wav'}));
+    const link = document.createElement('a');
+    link.href = url; link.download = `score-${bpm}bpm.wav`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    status.textContent = `${bpm} BPM · 1회분 WAV 저장 완료`;
+  } catch (error) { status.textContent = 'WAV 저장 실패: ' + error.message; }
+  finally { wavExporting = false; button.disabled = false; }
+});
 
 function applyBpmChange() {
   if (!isPlaying) {
@@ -1734,7 +1781,7 @@ async function renderLeft() {
 }
 
 async function renderRight() {
-  if (isPlaying) stopPlayback();
+  if (isPlaying || playbackStarting) stopPlayback();
   playbackData = null; // vrvRight.loadData() below reassigns element IDs, invalidating any cached timing/pitch data
   statusRight.textContent = '렌더링 중...';
   try {
@@ -1843,7 +1890,7 @@ function colorizeForDownloadOnly() {
 }
 
 async function handleFile(file, sampleInfo = {}) {
-  if (isPlaying) stopPlayback();
+  if (isPlaying || playbackStarting) stopPlayback();
   setGlobalError('');
   try {
     const buf = await file.arrayBuffer();
